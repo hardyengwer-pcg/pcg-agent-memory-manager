@@ -175,6 +175,24 @@ function getChatSpaceId(): string {
   return id.startsWith('spaces/') ? id : `spaces/${id}`;
 }
 
+function splitChatMessage(text: string, maxLength = 3400): string[] {
+  const chunks: string[] = [];
+  let remaining = text.trim();
+
+  while (remaining.length > maxLength) {
+    let splitAt = remaining.lastIndexOf('\n\n', maxLength);
+    if (splitAt < maxLength / 2) splitAt = remaining.lastIndexOf('\n', maxLength);
+    if (splitAt < maxLength / 2) splitAt = remaining.lastIndexOf(' ', maxLength);
+    if (splitAt <= 0) splitAt = maxLength;
+
+    chunks.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
 function loadChatState(): string | null {
   try {
     if (fs.existsSync(CHAT_STATE_FILE)) {
@@ -494,12 +512,14 @@ async function cmdDaily() {
   if (process.env.CHAT_SPACE_ID) {
     try {
       const chat = google.chat({ version: 'v1', auth: getOAuth2Client(accessToken) });
-      const clean = cleanContentForEmail(result.summary).slice(0, 4000);
-      await chat.spaces.messages.create({
-        parent: getChatSpaceId(),
-        requestBody: { text: `${CHAT_MARKER} Daily-Update ${result.dateStr}\n\n${clean}` },
-      });
-      console.log('Briefing nach Google Chat gepostet.');
+      const chunks = splitChatMessage(cleanContentForEmail(result.summary));
+      for (const [index, chunk] of chunks.entries()) {
+        await chat.spaces.messages.create({
+          parent: getChatSpaceId(),
+          requestBody: { text: `${CHAT_MARKER} Daily-Update ${result.dateStr} (${index + 1}/${chunks.length})\n\n${chunk}` },
+        });
+      }
+      console.log(`Briefing in ${chunks.length} Teilen nach Google Chat gepostet.`);
     } catch (chatErr: any) {
       console.warn('Chat-Post fehlgeschlagen:', chatErr?.message || chatErr);
     }
