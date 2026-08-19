@@ -1,0 +1,19 @@
+node_modules/
+bun.lock
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Secrets & lokale Zustandsdateien (Token / API-Key / Chat-State)
+.latest_token.json
+.google-refresh-token.json
+.chat-state.json
+.ai_settings.json
+.last_cron_status.json
+agent-memory/
+.antigravity/
+.agents/

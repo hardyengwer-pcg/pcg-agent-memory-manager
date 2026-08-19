@@ -1,0 +1,1 @@
+{"name":"Remix PCG Agent Memory Manager und Assistent","description":"Ein KI-Assistent zur autonomen Pflege des Memory-Systems für Hardy Engwer via Google Drive.","requestFramePermissions":["microphone"],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
