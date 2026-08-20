@@ -73,3 +73,20 @@ test('filters completed recommendations without an action block', () => {
   assert.doesNotMatch(result, /FNTV Cloud Function Timeout Alert/);
   assert.match(result, /Neuen Punkt pruefen/);
 });
+
+test('removes obsolete SUSE kickoff recommendation from an active project', () => {
+  const text = `## 2. Projektstatus
+- **SUSE**
+  • **Status:** On Track
+  • **Aktueller Stand:** Juan arbeitet bereits am Projekt.
+  • **Nächste Schritte:** Du kannst nun das offizielle Kickoff-Meeting einplanen.
+  • [Quelle: Chat](https://example.com)
+- **Anderes Projekt**
+  • **Nächste Schritte:** Kickoff vorbereiten.`;
+
+  const result = sanitizeActionProposals(text, '', '');
+
+  assert.doesNotMatch(result, /offizielle Kickoff-Meeting/);
+  assert.match(result, /Juan arbeitet bereits am Projekt/);
+  assert.match(result, /Anderes Projekt[\s\S]*Kickoff vorbereiten/);
+});

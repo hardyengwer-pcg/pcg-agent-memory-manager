@@ -1310,9 +1310,17 @@ function removeCompletedTaskRecommendations(text: string, completedTitles: strin
   return before + section + text.slice(sectionEnd);
 }
 
+function applyAuthoritativeProjectCorrections(text: string): string {
+  return text.replace(
+    /(^|\n)(- \*\*SUSE\*\*[\s\S]*?)(?=\n- \*\*|\n---|$)/gi,
+    (_match, prefix, block) => prefix + block.replace(/^\s*•?\s*\*\*Nächste Schritte:\*\*[^\n]*Kickoff[^\n]*\n?/gim, '')
+  );
+}
+
 export function sanitizeActionProposals(text: string, tasksContext?: string, eventsContext?: string): string {
   if (!text) return text;
   text = applyCanonicalSpellingCorrections(text);
+  text = applyAuthoritativeProjectCorrections(text);
   const taskStates = extractGoogleTaskStates(tasksContext);
   if (!text.includes('<ACTION_PROPOSALS>')) {
     text = removeCompletedTaskRecommendations(text, taskStates.completed);
