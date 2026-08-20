@@ -1025,6 +1025,16 @@ export async function fetchTasks(auth: any) {
   }
 }
 
+export function extractDavidOneOnOneAgenda(tasksContext?: string): string {
+  const agendaLine = tasksContext?.split('\n').find(line =>
+    /^- \[OFFEN\] Besprechung David\b/i.test(line.trim())
+  );
+
+  return agendaLine
+    ? `--- BESONDERE AGENDA-QUELLE: BESPRECHUNG DAVID ---\n${agendaLine}\nDiese Notiz enthält die gesammelten Themen für Davids 1:1 und muss bei jeder Vorbereitung eines David-Termins berücksichtigt werden.`
+    : '--- BESONDERE AGENDA-QUELLE: BESPRECHUNG DAVID ---\nKeine offene Aufgabe "Besprechung David" gefunden.';
+}
+
 // Function to recursively list files in the knowledge base folder
 async function listAllFiles(drive: any, folderId: string, pathPrefix = '') {
   let files: any[] = [];
@@ -1987,6 +1997,7 @@ app.post('/api/agent/chat', async (req, res) => {
     const eventsContext = await fetchUpcomingEvents(oauth2Client);
     const chatsContext = await fetchRecentChats(oauth2Client);
     const tasksContext = await fetchTasks(oauth2Client);
+    const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
     const localMemoryContext = loadLocalMemoryContext();
 
     // Check if there is an existing canonical daily update for today
@@ -2043,6 +2054,7 @@ WICHTIGE FOKUS- & BRIEFING-REGELN:
 7. 📋 STRIKTE VOLLSTÄNDIGKEIT & KONSISTENZ (MANDATORISCHER THEMEN-AUDIT BEI JEDEM AUFRUF):
    - Gehe JEDES MAL ausnahmslos ALLE unerledigten/offenen Themen, Projekte und To-Dos aus allen Datenquellen lückenlos durch.
    - Keines der offenen Themen darf ausgelassen werden. Synchronisiere jedes Thema mit den allerneuesten Ergebnissen aus Drive, Mails und Chats.
+    - BESONDERE DAVID-1:1-AGENDA: Die offene Google-Task "Besprechung David" ist Hardys dauerhafte Agenda-Sammelstelle. Berücksichtige ihren vollständigen Titel und insbesondere die Notiz bei JEDEM Kontextaufbau. Wenn ein David-1:1 ansteht, nimm alle dort gesammelten Themen vollständig als Agenda-/Vorbereitungspunkte auf. Erstelle dafür kein separates To-do, außer eine eigenständige Vorbereitungsaufgabe ist ausdrücklich nötig.
 
 8. 🎯 STRIKTER QUERABGLEICH MIT MEETINGS FÜRS "DOING" (KEINE REDUNDANTEN TO-DOS):
    - Wenn mit einer Person oder einem Kunden heute oder in Kürze bereits ein Meeting / 1:1 im Kalender steht (wie z. B. heute Meeting mit Marion):
@@ -2123,6 +2135,10 @@ ${eventsContext}
 ${chatsContext}
 
 ${tasksContext}
+
+Besondere DAVID-1:1-AGENDA: Die offene Google-Task "Besprechung David" ist Hardys dauerhafte Agenda-Sammelstelle. Berücksichtige ihren vollständigen Titel und insbesondere die Notiz bei JEDEM Kontextaufbau. Wenn ein David-1:1 ansteht, nimm alle dort gesammelten Themen vollständig als Agenda-/Vorbereitungspunkte auf. Erstelle dafür kein separates To-do, außer eine eigenständige Vorbereitungsaufgabe ist ausdrücklich nötig.
+
+${davidAgendaContext}
 
 WIEDERHOLTE AUTORITATIVE NUTZERKORREKTUREN (bei Konflikten zwingend anwenden):
 ${localMemoryContext}
@@ -2205,6 +2221,7 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
   const eventsContext = await fetchUpcomingEvents(oauth2Client);
   const chatsContext = await fetchRecentChats(oauth2Client);
   const tasksContext = await fetchTasks(oauth2Client);
+  const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
   const localMemoryContext = loadLocalMemoryContext();
 
   const nowStr = new Date().toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' });
@@ -2268,6 +2285,8 @@ ${chatsContext}
 
 --- TO-DOS ---
 ${tasksContext}
+
+${davidAgendaContext}
 
 --- AUTORITATIVE NUTZERKORREKTUREN (ÜBERSCHREIBEN ÄLTERE QUELLEN) ---
 ${localMemoryContext}

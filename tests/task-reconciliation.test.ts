@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sanitizeActionProposals } from '../server.ts';
+import { extractDavidOneOnOneAgenda, sanitizeActionProposals } from '../server.ts';
 
 const tasksContext = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
 OFFEN:
 - [OFFEN] Onboarding Michael vorbereiten | Liste: My Tasks
 ERLEDIGT:
 - [ERLEDIGT] FNTV Cloud Function Timeout Alert pruefen | Liste: My Tasks`;
+
+test('always exposes Besprechung David as the dedicated 1:1 agenda source', () => {
+  const context = '- [OFFEN] Besprechung David | Liste: My Tasks | Notiz: Lorenz, Staffing und Odoo klären';
+  const result = extractDavidOneOnOneAgenda(context);
+
+  assert.match(result, /Besprechung David/);
+  assert.match(result, /Lorenz, Staffing und Odoo klären/);
+  assert.match(result, /bei jeder Vorbereitung eines David-Termins berücksichtigt/);
+});
 
 test('removes completed task from recommendations and proposals', () => {
   const text = `## 4. Konkrete naechste Schritte
