@@ -36,16 +36,20 @@ Der Lauf sammelt Workspace-Kontext, erstellt ein Briefing, speichert es in Drive
 
 ## Windows Task Scheduler
 
-`run-agent.cmd` ist ein Wrapper mit Logdatei. Beispiel fuer das taegliche Briefing:
+`run-agent.cmd` ist ein Wrapper mit Logdatei. `run-agent-hidden.vbs` startet ihn ohne sichtbares Konsolenfenster.
+
+Die lokale Einrichtung verwendet morgens um 08:00 Uhr das Briefing und abends um 18:00 Uhr die Chat-Anweisungsverarbeitung:
 
 ```powershell
-schtasks /create /tn "PCG Agent Daily" /tr "C:\Pfad\zum\Projekt\run-agent.cmd daily" /sc daily /st 08:00
+$project = "C:\Pfad\zum\Projekt"
+schtasks /create /tn "PCG Agent Daily" /tr "wscript.exe `"$project\run-agent-hidden.vbs`" daily" /sc daily /st 08:00 /f
+schtasks /create /tn "PCG Agent Chat EOD" /tr "wscript.exe `"$project\run-agent-hidden.vbs`" chat-process" /sc daily /st 18:00 /f
 ```
 
-Google Chat kann per Polling betrieben werden:
+Alternativ kann Google Chat häufiger per Polling betrieben werden:
 
 ```powershell
-schtasks /create /tn "PCG Agent Chat" /tr "C:\Pfad\zum\Projekt\run-agent.cmd chat-process" /sc minute /mo 5
+schtasks /create /tn "PCG Agent Chat" /tr "wscript.exe `"$project\run-agent-hidden.vbs`" chat-process" /sc minute /mo 5 /f
 ```
 
 Vor dem Aktivieren geplanter Tasks einen manuellen `daily`- und `chat-process`-Lauf pruefen.
