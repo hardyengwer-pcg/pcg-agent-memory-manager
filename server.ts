@@ -651,11 +651,12 @@ export async function fetchRecentEmails(auth: any) {
   try {
     const gmail = google.gmail({ version: 'v1', auth });
     
-    // 1. Fetch recent emails across Inbox, Trash, Archive
+    // Fetch recent active emails. Trash and spam must never influence task state.
     const res = await gmail.users.messages.list({
       userId: 'me',
+      q: 'newer_than:45d -in:trash -in:spam',
       maxResults: 60,
-      includeSpamTrash: true,
+      includeSpamTrash: false,
     });
     const messages = res.data.messages || [];
 
@@ -664,9 +665,9 @@ export async function fetchRecentEmails(auth: any) {
     try {
       const targetedRes = await gmail.users.messages.list({
         userId: 'me',
-        q: 'transcript OR transkript OR "meeting notes" OR protokoll OR summary OR zusammenfassung OR "action items" OR todo OR to-do OR aufgabe OR projekt OR zugewiesen OR "next steps" OR handover OR scoping OR proposal OR sow OR "statement of work" OR "use case" OR "use cases" OR review OR retrospective OR alignment OR sync OR briefing OR absprache OR "Koenig" OR "Bauer" OR "Lorenz" OR "domcura" OR "voestalpine" OR "VOEST" OR "PK" OR "Einarbeitung" OR "Einarbeitungsplan" OR "Onboarding" OR "Mitarbeiter" OR "September" OR "Joiner" OR "Welcome" OR "Schulung"',
+        q: 'newer_than:45d -in:trash -in:spam (transcript OR transkript OR "meeting notes" OR protokoll OR summary OR zusammenfassung OR "action items" OR todo OR to-do OR aufgabe OR projekt OR zugewiesen OR "next steps" OR handover OR scoping OR proposal OR sow OR "statement of work" OR "use case" OR "use cases" OR review OR retrospective OR alignment OR sync OR briefing OR absprache OR "Koenig" OR "Bauer" OR "Lorenz" OR "domcura" OR "voestalpine" OR "VOEST" OR "PK" OR "Einarbeitung" OR "Einarbeitungsplan" OR "Onboarding" OR "Mitarbeiter" OR "September" OR "Joiner" OR "Welcome" OR "Schulung")',
         maxResults: 50,
-        includeSpamTrash: true
+        includeSpamTrash: false
       });
       targetedMessages = targetedRes.data.messages || [];
     } catch (targetErr: any) {
@@ -706,10 +707,10 @@ export async function fetchRecentEmails(auth: any) {
         const snippet = mRes.data.snippet || '';
         const internalDate = Number(mRes.data.internalDate) || (date ? new Date(date).getTime() : 0);
 
+        if (labelIds.includes('TRASH') || labelIds.includes('SPAM')) continue;
+
         let statusStr = "Posteingang (Aktiv)";
-        if (labelIds.includes('TRASH')) {
-          statusStr = "PAPIERKORB / GELÖSCHT";
-        } else if (!labelIds.includes('INBOX')) {
+        if (!labelIds.includes('INBOX')) {
           statusStr = "ARCHIVIERT";
         }
 
@@ -783,7 +784,7 @@ export async function fetchRecentEmails(auth: any) {
       return (a.id || '').localeCompare(b.id || '');
     });
 
-    let emailsContext = "Neueste E-Mails & Transkripte (Posteingang, Archiv & Papierkorb):\n";
+    let emailsContext = "Neueste aktive E-Mails & Transkripte (Posteingang und Archiv; ohne Papierkorb/Spam):\n";
     const nowMs = Date.now();
     for (const em of parsedEmails) {
       // Calculate age in days
@@ -804,9 +805,7 @@ export async function fetchRecentEmails(auth: any) {
       const mailUrl = `https://mail.google.com/mail/u/0/#all/${em.id}`;
       
       let ageFlag = '';
-      if (em.statusStr.includes("PAPIERKORB")) {
-        ageFlag = ` [🗑️ GELÖSCHT IM PAPIERKORB - KEINE NEUEN TO-DOS ODER PRIORITÄTEN DARAUS ABLEITEN]`;
-      } else if (daysOld > 21) {
+      if (daysOld > 21) {
         ageFlag = ` [⚠️ HISTORISCHE E-MAIL (${daysOld} Tage alt) - VORHER PRÜFEN OB NOCH AKTUELL; NICHT als aktuelle Prio oder neue To-Dos interpretieren]`;
       } else if (daysOld > 7) {
         ageFlag = ` [Älterer Thread (${daysOld} Tage alt) - Aktualität vor Erwähnung gegenprüfen]`;
@@ -930,7 +929,7 @@ export async function fetchRecentChats(auth: any) {
         for (const msg of msgs) {
           const sender = msg.sender?.displayName || msg.sender?.name || 'User';
           const text = msg.text || '(Kein Text)';
-          const timeStr = msg.createTime ? ` [${new Date(msg.createTime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}]` : '';
+          const timeStr = msg.createTime ? ` [${new Date(msg.createTime).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}]` : '';
           chatContext += `   * ${sender}${timeStr}: "${text.replace(/\n+/g, ' ')}"\n`;
         }
       } catch (msgErr: any) {
@@ -947,46 +946,78 @@ export async function fetchRecentChats(auth: any) {
 export async function fetchTasks(auth: any) {
   try {
     const tasksApi = google.tasks({ version: 'v1', auth });
-    const listsRes = await tasksApi.tasklists.list({ maxResults: 20 });
-    const taskLists = listsRes.data.items || [];
-    let tasksContext = "Google Tasks (Aktuell Offene & Kürzlich Erledigte Aufgaben der letzten Tage):\n";
-    let count = 0;
-    const nowMs = Date.now();
+    const taskLists: any[] = [];
+    let listPageToken: string | undefined;
+    do {
+      const listsRes = await tasksApi.tasklists.list({ maxResults: 100, pageToken: listPageToken });
+      taskLists.push(...(listsRes.data.items || []));
+      listPageToken = listsRes.data.nextPageToken || undefined;
+    } while (listPageToken);
+
+    const openTasks: { task: any; listTitle: string }[] = [];
+    const completedTasks: { task: any; listTitle: string }[] = [];
+    const completedMin = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
     const tasksUrl = 'https://tasks.google.com/';
 
     for (const list of taskLists) {
       if (!list.id) continue;
-      const res = await tasksApi.tasks.list({
-        tasklist: list.id,
-        showCompleted: true,
-        showHidden: false, // Omit hidden/deleted tasks
-        maxResults: 50
-      });
-      const items = res.data.items || [];
-      for (const task of items) {
-        if (!task.title) continue;
-        const isDone = task.status === 'completed';
-
-        // Filter out completed tasks that were completed more than 5 days ago to prevent surfacing obsolete topics
-        if (isDone && task.completed) {
-          const completedTime = new Date(task.completed).getTime();
-          const daysAgo = Math.floor((nowMs - completedTime) / (1000 * 60 * 60 * 24));
-          if (daysAgo > 5) {
-            continue; // Skip old completed tasks
-          }
+      let openPageToken: string | undefined;
+      do {
+        const res = await tasksApi.tasks.list({
+          tasklist: list.id,
+          showCompleted: false,
+          showHidden: false,
+          maxResults: 100,
+          pageToken: openPageToken
+        });
+        for (const task of res.data.items || []) {
+          if (task.title && task.status !== 'completed') openTasks.push({ task, listTitle: list.title || '(ohne Namen)' });
         }
+        openPageToken = res.data.nextPageToken || undefined;
+      } while (openPageToken);
 
-        count++;
-        const statusIcon = isDone ? '[ERLEDIGT - THEMA ABGESCHLOSSEN]' : '[OFFEN]';
-        const dueStr = task.due ? ` (Fällig: ${new Date(task.due).toLocaleDateString('de-DE')})` : '';
-        const completedStr = task.completed ? ` (Erledigt am: ${new Date(task.completed).toLocaleDateString('de-DE')})` : '';
+      let completedPageToken: string | undefined;
+      do {
+        const res = await tasksApi.tasks.list({
+          tasklist: list.id,
+          showCompleted: true,
+          showHidden: true,
+          completedMin,
+          maxResults: 100,
+          pageToken: completedPageToken
+        });
+        for (const task of res.data.items || []) {
+          if (task.title && task.status === 'completed') completedTasks.push({ task, listTitle: list.title || '(ohne Namen)' });
+        }
+        completedPageToken = res.data.nextPageToken || undefined;
+      } while (completedPageToken);
+    }
+
+    openTasks.sort((a, b) => (a.task.due || '9999').localeCompare(b.task.due || '9999') || a.task.title.localeCompare(b.task.title));
+    completedTasks.sort((a, b) => (b.task.completed || '').localeCompare(a.task.completed || ''));
+
+    let tasksContext = "Google Tasks – AUTORITATIVE AUFGABENZUSTÄNDE:\n";
+    tasksContext += "OFFEN (müssen berücksichtigt werden, auch wenn andere Quellen das Thema als abgeschlossen bezeichnen):\n";
+    if (openTasks.length === 0) {
+      tasksContext += "(Keine offenen Aufgaben in Google Tasks.)\n";
+    } else {
+      for (const { task, listTitle } of openTasks) {
+        const dueStr = task.due ? ` | Fällig: ${new Date(task.due).toLocaleDateString('de-DE')}` : '';
         const notesStr = task.notes ? ` | Notiz: ${task.notes.replace(/\n+/g, ' ')}` : '';
-        tasksContext += `- ${statusIcon} ${task.title}${dueStr}${completedStr} (Liste: ${list.title}) | Direktlink: ${tasksUrl}${notesStr}\n`;
+        tasksContext += `- [OFFEN] ${task.title} | Liste: ${listTitle}${dueStr} | Direktlink: ${tasksUrl}${notesStr}\n`;
       }
     }
-    if (count === 0) {
-      tasksContext += "(Keine offenen Aufgaben in Google Tasks gefunden. Wichtig: Prüfe To-Dos aus aktuellen E-Mails, Meeting-Protokollen und Transkripten!)\n";
+
+    tasksContext += "ERLEDIGT (dürfen durch ältere E-Mails, Chats, Kalender oder Drive-Dokumente NICHT reaktiviert werden):\n";
+    if (completedTasks.length === 0) {
+      tasksContext += "(Keine in den letzten 180 Tagen erledigten Aufgaben gefunden.)\n";
+    } else {
+      for (const { task, listTitle } of completedTasks) {
+        const completedStr = task.completed ? new Date(task.completed).toLocaleDateString('de-DE') : 'unbekannt';
+        tasksContext += `- [ERLEDIGT] ${task.title} | Liste: ${listTitle} | Erledigt am: ${completedStr} | Direktlink: ${tasksUrl}\n`;
+      }
     }
+
     return tasksContext;
   } catch (e: any) {
     console.warn("Tasks fetch notice:", e?.message || e);
@@ -1218,10 +1249,70 @@ function applyCanonicalSpellingCorrections(text: string): string {
   return corrected;
 }
 
+function normalizeTaskComparisonText(value: string): string {
+  const stopWords = new Set([
+    'aber', 'als', 'am', 'an', 'auf', 'aus', 'bei', 'bis', 'das', 'den', 'der', 'die', 'ein', 'eine',
+    'fuer', 'für', 'im', 'in', 'ist', 'mit', 'nach', 'oder', 'und', 'von', 'vor', 'zu', 'zum', 'zur'
+  ]);
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' und ')
+    .replace(/[^a-z0-9äöüß]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(word => word.length > 1 && !stopWords.has(word))
+    .join(' ');
+}
+
+function areTaskTextsSimilar(first: string, second: string): boolean {
+  const a = normalizeTaskComparisonText(first);
+  const b = normalizeTaskComparisonText(second);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) >= 12 && (a.includes(b) || b.includes(a))) return true;
+
+  const aWords = new Set(a.split(' '));
+  const bWords = new Set(b.split(' '));
+  const common = [...aWords].filter(word => bWords.has(word)).length;
+  const smallerSize = Math.min(aWords.size, bWords.size);
+  return common >= 2 && smallerSize > 0 && common / smallerSize >= 0.65;
+}
+
+function extractGoogleTaskStates(tasksContext?: string): { open: string[]; completed: string[] } {
+  const result = { open: [] as string[], completed: [] as string[] };
+  if (!tasksContext) return result;
+
+  for (const line of tasksContext.split('\n')) {
+    const match = line.match(/^- \[(OFFEN|ERLEDIGT)\] (.*?)(?= \|)/);
+    if (!match) continue;
+    (match[1] === 'OFFEN' ? result.open : result.completed).push(match[2].trim());
+  }
+  return result;
+}
+
+function removeCompletedTaskRecommendations(text: string, completedTitles: string[]): string {
+  if (completedTitles.length === 0) return text;
+  const sectionStart = text.search(/^## 4\.\s/m);
+  if (sectionStart < 0) return text;
+
+  const actionStart = text.indexOf('<ACTION_PROPOSALS>', sectionStart);
+  const sectionEnd = actionStart >= 0 ? actionStart : text.length;
+  const before = text.slice(0, sectionStart);
+  const section = text.slice(sectionStart, sectionEnd).replace(
+    /^- \*\*([^*\n]+)\*\*[\s\S]*?(?=^- \*\*|$)/gm,
+    (block, title) => completedTitles.some(completed => areTaskTextsSimilar(title, completed)) ? '' : block
+  );
+  return before + section + text.slice(sectionEnd);
+}
+
 export function sanitizeActionProposals(text: string, tasksContext?: string, eventsContext?: string): string {
   if (!text) return text;
   text = applyCanonicalSpellingCorrections(text);
+  const taskStates = extractGoogleTaskStates(tasksContext);
   if (!text.includes('<ACTION_PROPOSALS>')) {
+    text = removeCompletedTaskRecommendations(text, taskStates.completed);
     text = convertMarkdownTablesToCleanText(text);
     text = text.replace(/###?\s*📅?\s*Datenbasis\s*&?\s*Zeiträume[\s\S]*?(?=(?:###?|\n\n[1-5]\.|\n\n[A-Z]))/gi, '').trim();
     text = text.replace(/-\s*\*\*Kalender:\*\*[\s\S]*?(?=\n\n|\n[1-5]\.)/gi, '').trim();
@@ -1229,33 +1320,9 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
   }
 
   const match = text.match(/<ACTION_PROPOSALS>([\s\S]*?)<\/ACTION_PROPOSALS>/);
-  if (!match) return text;
+  if (!match) return removeCompletedTaskRecommendations(text, taskStates.completed);
 
   const todayISO = new Date().toISOString().split('T')[0];
-
-  // List of strictly completed projects/topics that must NEVER have new To-Dos proposed
-  const completedProjectTerms = [
-    'suse', 
-    'freenet', 
-    'freenettv', 
-    'freenet tv', 
-    'hibob', 
-    'stundenzettel', 
-    'nils traut', 
-    'lorenz funding'
-  ];
-
-  // Extract existing task titles/lines for deduplication
-  const existingTaskLines: string[] = [];
-  if (tasksContext) {
-    const lines = tasksContext.split('\n');
-    for (const l of lines) {
-      if (l.includes('[OFFEN]') || l.includes('[ERLEDIGT]') || l.includes('[ ]')) {
-        const clean = l.replace(/^-\s*(\[[^\]]+\])?\s*/, '').toLowerCase().trim();
-        if (clean) existingTaskLines.push(clean);
-      }
-    }
-  }
 
   // Extract today's & tomorrow's meeting titles, descriptions and participants for intelligent cross-referencing
   const todayMeetingKeywords: string[] = [];
@@ -1285,10 +1352,10 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
         const titleLower = (p.title || p.details?.title || '').toLowerCase().trim();
         const notesLower = (p.details?.notes || p.details?.body || '').toLowerCase().trim();
 
-        // 1. FILTER OUT COMPLETED PROJECTS & ADMINISTRATIVE REMINDERS (SuSe, FreenetTV, HiBob Stundenzettel, etc.)
-        const isCompletedProject = completedProjectTerms.some(term => titleLower.includes(term) || notesLower.includes(term));
-        if (isCompletedProject) {
-          console.log(`[Completed Topic Filter] Removed proposal for completed/administrative topic: "${p.title}"`);
+        const proposalText = `${titleLower} ${notesLower}`.trim();
+        const matchesCompletedTask = taskStates.completed.some(completed => areTaskTextsSimilar(proposalText, completed));
+        if (matchesCompletedTask) {
+          console.log(`[Completed Task Filter] Removed proposal matching completed Google Task: "${p.title}"`);
           modified = true;
           continue;
         }
@@ -1327,32 +1394,11 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
           continue;
         }
 
-        // 4. TASK DEDUPLICATION CHECK
-        if (p.type === 'task') {
-          let isDuplicate = false;
-
-          for (const existing of existingTaskLines) {
-            // Direct substring containment check
-            if (titleLower && existing && (existing.includes(titleLower) || titleLower.includes(existing))) {
-              isDuplicate = true;
-              break;
-            }
-            // Significant word overlap check
-            const titleWords = titleLower.split(/[\s,.-]+/).filter((w: string) => w.length > 2);
-            if (titleWords.length >= 2) {
-              const matchCount = titleWords.filter((w: string) => existing.includes(w)).length;
-              if (matchCount >= 2 && matchCount / titleWords.length >= 0.5) {
-                isDuplicate = true;
-                break;
-              }
-            }
-          }
-
-          if (isDuplicate) {
-            console.log(`[Deduplication] Removed duplicate proposed task: "${p.title}"`);
-            modified = true;
-            continue; // Skip duplicate task proposal
-          }
+        // Existing open tasks remain authoritative and must not be duplicated by any action proposal.
+        if (taskStates.open.some(open => areTaskTextsSimilar(proposalText, open))) {
+          console.log(`[Open Task Deduplication] Removed proposal matching open Google Task: "${p.title}"`);
+          modified = true;
+          continue;
         }
 
         if (p.details) {
@@ -1396,6 +1442,8 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
   } catch (e) {
     console.warn("Could not parse/sanitize action proposals JSON:", e);
   }
+
+  text = removeCompletedTaskRecommendations(text, taskStates.completed);
 
   // 5. Convert any markdown tables to clean bullet and paragraph formatting
   text = convertMarkdownTablesToCleanText(text);
@@ -1504,6 +1552,9 @@ MANDATORISCHE VORHERIGE AKTUALITÄTS- & RELEVANZ-PRÜFUNG:
 1. VOR JEDER AUSGABE EINES THEMAS ODER TO-DOS: Prüfe immer vorher, ob das Thema tatsächlich noch aktuell und aktiv ist!
 2. Wenn eine Information oder ein E-Mail-Thread älter als 1-2 Wochen ist und seither kein neuer Termin, kein neuer Austausch und keine offene Google Task dazu existiert, gilt das Thema als historisch/abgeschlossen und darf NICHT als neue Priorität oder aktives To-Do angezeigt werden.
 3. Inhalte aus dem Papierkorb (Trash) oder alte, unveränderte Drive-Dokumente dürfen keinesfalls als unerledigte To-Dos vorgeschlagen werden.
+4. KONFLIKTPRIORITÄT: Neueste explizite Nutzerkorrektur im lokalen Memory > Google-Tasks-Status > neueste datierte Mail/Chat/Meeting-Notiz > ältere Quellen.
+5. Ein [ERLEDIGT]-Status in Google Tasks ist für genau diese Aufgabe final und darf durch ältere Quellen nicht reaktiviert werden.
+6. Ein [OFFEN]-Status in Google Tasks bleibt aktiv, auch wenn das übergeordnete Projekt oder eine ältere Notiz als abgeschlossen bezeichnet wird.
 
 STRIKTER QUERABGLEICH MIT KALENDER & MEETINGS (KONTEXTVERSTÄNDNIS FÜR DAS "DOING"):
 1. VOR JEDEM AKTIONEN- ODER TO-DO-VORSCHLAG: Prüfe immer den Kalender ("--- KALENDER ---")!
@@ -1513,9 +1564,10 @@ STRIKTER QUERABGLEICH MIT KALENDER & MEETINGS (KONTEXTVERSTÄNDNIS FÜR DAS "DOI
    - Nenne das Thema stattdessen als **Agenda-Punkt / Notiz zur Meeting-Vorbereitung** im Text des Briefings – erstelle KEIN separates Doing/Action Proposal dafür!
 3. Erstelle nur dann ein Action Proposal / To-Do, wenn ein echtes asynchrones To-Do vorliegt, das NICHT Gegenstand eines heute anstehenden Meetings ist.
 
-STRIKTE REGEL FÜR ABGESCHLOSSENE PROJEKTE & ADMINISTRATIVE MITTEILUNGEN (z. B. SuSe, FreenetTV, HiBob Stundenzettel, Lorenz Funding):
-1. Abgeschlossene Projekte & erledigte Aufgaben (wie SuSe, FreenetTV oder Aufgaben unter [ERLEDIGT]):
-   - Schlage HIERZU KEINESFALLS NEUE TO-DOS, ACTION PROPOSALS ODER NACHFASS-AUFGABEN VOR! Diese Themen sind final erledigt.
+STRIKTE REGEL FÜR ABGESCHLOSSENE AUFGABEN & ADMINISTRATIVE MITTEILUNGEN:
+1. Aufgaben unter [ERLEDIGT] und im lokalen Memory explizit abgeschlossene Punkte:
+   - Schlage dieselbe Aufgabe KEINESFALLS erneut als To-do, Action Proposal oder Nachfass-Aufgabe vor.
+   - Ein Projekt darf trotzdem einen neuen Status haben; schliesse nicht pauschal alle zukünftigen Aufgaben eines Projekts aus.
 2. HiBob / Stundenzettel-Freigaben (z. B. Stundenzettel von Nils Traut):
    - Sind administrative E-Mail-Mitteilungen bzw. längst erledigt. NIEMALS als offene To-Dos oder Freigabeaufgaben vorschlagen!
 3. Panda Auslastung:
@@ -1551,7 +1603,7 @@ STRIKTE REGEL FÜR INTERNE TERMINE (Thursdays for Data):
 
 STRIKTE DUPLIKATS-VERMEIDUNGS-REGEL (GEGENCHECK BESTEHENDER TO-DOS):
 1. PRÜFE VOR JEDEM VORSCHLAG DIE ABSCHNITTE "--- TO-DOS ---" / GOOGLE TASKS!
-2. Wenn eine Aufgabe inhaltlich bereits existiert (wie z. B. "Hotelabstimmung mit Ana", "Hotel buchen Ana", "Status nachhaken" etc. – egal ob als [OFFEN] oder [ERLEDIGT] geführt), DARFST DU DIESE UNTER KEINEN UMSTÄNDEN NOCHMALS ALS NEUE TO-DO ODER IN DEN <ACTION_PROPOSALS> VORSCHLAGEN!
+2. Wenn eine Aufgabe inhaltlich bereits als [OFFEN] oder [ERLEDIGT] existiert, DARFST DU DIESE NICHT nochmals als neues To-do oder Action Proposal vorschlagen. [OFFEN] bleibt im Briefing sichtbar; [ERLEDIGT] wird nicht reaktiviert.
 3. Schlage NUR Aufgaben vor, die wirklich NEU sind und noch in KEINER Liste vorkommen.
 
 STRIKTE DATUMS- UND FRISTENREGEL (FEHLERVERMEIDUNG):
@@ -1951,7 +2003,9 @@ WICHTIGE FOKUS- & BRIEFING-REGELN:
    - STRIKTE AKTUALITÄTS-REGEL: Überprüfe JEDES Thema, Projekt und To-Do VOR der Anzeige auf Aktualität und Relevanz!
    - Liegt der letzte Vorgang, die letzte E-Mail oder Notiz länger als 7-14 Tage zurück und gibt es KEINEN anstehenden Termin oder offene Google Task dazu? -> Thema ist veraltet/inaktiv und darf NICHT als aktuelle Priorität, offenes Thema oder To-Do angezeigt werden.
    - Gelöschte E-Mails aus dem Papierkorb (Trash) und alte Archiv-Mails dürfen NIEMALS als aktive Themen herangezogen werden.
-   - Dokumentierte oder erledigte Themen (wie SuSe, FreenetTV oder Aufgaben mit [ERLEDIGT]) sind FINAL ABGESCHLOSSEN und dürfen unter keinen Umständen wiederbelebt oder erneut vorgeschlagen werden!
+   - Konfliktpriorität: neueste explizite Nutzerkorrektur im lokalen Memory > Google-Tasks-Status > neueste datierte Mail/Chat/Meeting-Notiz > ältere Quelle.
+   - Eine Aufgabe mit [ERLEDIGT] ist final abgeschlossen und darf nicht aus alten Quellen wiederbelebt werden. Eine Aufgabe mit [OFFEN] bleibt dagegen aktiv, selbst wenn eine andere Quelle das Projekt pauschal als abgeschlossen bezeichnet.
+   - Projektstatus und Aufgabenstatus getrennt behandeln: Ein abgeschlossenes Einzel-To-do bedeutet nicht automatisch, dass das gesamte Projekt abgeschlossen ist.
    - Konzentriere dich ausnahmslos auf die realen, aktuellen und anstehenden Prioritäten von heute, morgen und den nächsten Arbeitstagen.
 
 7. 📋 STRIKTE VOLLSTÄNDIGKEIT & KONSISTENZ (MANDATORISCHER THEMEN-AUDIT BEI JEDEM AUFRUF):
@@ -2015,7 +2069,7 @@ WICHTIGE FOKUS- & BRIEFING-REGELN:
    - Führe vor der Ausgabe eine interne Selbstkontrolle durch:
      1. Wurden wirklich ALLE relevanten Quellen (Drive-Transkripte, Google Chat, E-Mails, Kalender, Tasks) lückenlos geprüft?
      2. Wurde kein aktives Kundenprojekt ausgelassen?
-     3. Wurden alle alten/erledigten Themen (SuSe, FreenetTV, HiBob Stundenzettel) sicher ausgefiltert?
+     3. Wurden alle [ERLEDIGT]-Tasks und expliziten Nutzerkorrekturen berücksichtigt, ohne offene Tasks desselben Projekts zu unterdrücken?
      4. Wurden überall die korrekten Schreibweisen ("domcura", "VOEST Alpine") verwendet?
      5. Wurde "Thursdays for Data" silent ignoriert und KEIN "Punkt 4: Ignorierte interne Termine" erzeugt?
      6. Sind alle Quellenangaben als anklickbare Markdown-Links formatiert?
@@ -2190,13 +2244,14 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
 1. KEINE TABELLEN: Verwende NIEMALS Markdown-Tabellen. Stelle alle Status-Übersichten in klaren Text-Absätzen und Aufzählungslisten (Bullet Points) dar.
 2. KEIN QUELLENKATALOG IM HEADER: Keine Auflistungen wie "Kalender: Termine...", "E-Mails: Neueste 50..." im Header.
 3. MANDATORISCHE AKTUALITÄTSPRÜFUNG: Überprüfe jedes Thema vor der Anzeige auf Aktualität. Wenn eine E-Mail, Notiz oder Aufgabe länger als 7-14 Tage zurückliegt und kein anstehender Termin oder offener Task vorliegt, ist das Thema inaktiv und wird NICHT mehr angezeigt.
+   Konfliktpriorität: neueste explizite Nutzerkorrektur im lokalen Memory > Google-Tasks-Status > neueste datierte Mail/Chat/Meeting-Notiz > ältere Quelle. [ERLEDIGT] darf nie aus alten Quellen reaktiviert werden; [OFFEN] bleibt aktiv.
 4. Universelle Analyse von Transkripten & Projekt-Zuweisungen: Analysiere Transkripte und Mitschriften aus E-Mails, Drive und Besprechungen lückenlos und leite konkrete To-Dos für jede Hardy zugewiesene Aufgabe, Zusage oder Projektverantwortung ab.
 5. End-to-End Pipeline-, Scoping- & SoW-Tracking: Erfasse Use Cases, Leistungsanforderungen und Deliverables aus Kunden-, Partner- und Vertriebs-Gesprächen. Tracke Wartezustände (z. B. Warten auf Use Cases/Input, anschließende SoW-Generierung) und schlage dafür proaktiv Nachfass- & Entwurfs-To-Dos vor.
 6. Proaktive Meeting-Vorbereitung (spätestens 1 Tag vorher): Bereite Hardy auf Kunden- und Use-Case-Meetings (wie Schwarz / DSV) für heute, morgen und Montag basierend auf vorhandenen Notizen und eingetragenen Vorbereitungen vor.
 7. Vorausschau: Schaue vorausschauend auf Montag und die nächste Woche.
 8. Vollständigkeit: Gehe lückenlos alle aktiven, unerledigten Themen durch und synchronisiere sie mit den neuesten Quellen.
 9. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!
-10. Abgeschlossene Themen: SuSe, FreenetTV und alle erledigten Aufgaben sind abgeschlossen und dürfen NIEMALS als neue To-Dos vorgeschlagen werden.
+10. Abgeschlossene Aufgaben: Alle mit [ERLEDIGT] markierten oder im lokalen Memory explizit abgeschlossenen Einzelaufgaben dürfen nie erneut vorgeschlagen werden. Projekte nicht pauschal abschliessen; offene Google Tasks desselben Projekts bleiben gültig.
 11. Ignorierte Termine: "Thursdays for Data" ist intern und wird immer still ignoriert. KEINEN Abschnitt "Ignorierte interne Termine" erstellen!
 12. Projekt-Fakten & Schreibweisen:
     - "domcura" (immer kleingeschrieben).
