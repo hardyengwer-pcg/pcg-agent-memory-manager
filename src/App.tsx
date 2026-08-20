@@ -50,7 +50,7 @@ export default function App() {
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [apiKeyInvalidFormat, setApiKeyInvalidFormat] = useState(false);
   const [apiKeyMasked, setApiKeyMasked] = useState('');
-  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
+  const [selectedModel, setSelectedModel] = useState('gemini-3.5-flash');
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingSettings, setIsTestingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);

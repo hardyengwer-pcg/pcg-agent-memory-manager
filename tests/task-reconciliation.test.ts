@@ -90,3 +90,26 @@ test('removes obsolete SUSE kickoff recommendation from an active project', () =
   assert.match(result, /Juan arbeitet bereits am Projekt/);
   assert.match(result, /Anderes Projekt[\s\S]*Kickoff vorbereiten/);
 });
+
+test('removes completed task sentences from Section 2 Nächste Schritte', () => {
+  const lorenzTasks = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
+OFFEN:
+- [OFFEN] Onboarding Michael vorbereiten | Liste: My Tasks
+ERLEDIGT:
+- [ERLEDIGT] Lorenz: Sudipt Pandas Stunden auf Task 362 umbuchen | Liste: My Tasks`;
+
+  const text = `## 2. Projektstatus
+- **Project Lorenz (Cure)**
+  • **Status:** In Klärung
+  • **Aktueller Stand:** Drive-Freigaben erteilt.
+  • **Nächste Schritte:** Sudipt Pandas falsch gebuchte Stunden von Ticket 112507 auf Task 362 verschieben. IT muss Passwort freischalten.
+  • [Quelle: Chat](https://example.com)
+- **SUSE**
+  • **Nächste Schritte:** Workshop vorbereiten.`;
+
+  const result = sanitizeActionProposals(text, lorenzTasks, '');
+
+  assert.doesNotMatch(result, /Sudipt Pandas falsch gebuchte Stunden/);
+  assert.match(result, /IT muss Passwort freischalten/);
+  assert.match(result, /SUSE[\s\S]*Workshop vorbereiten/);
+});

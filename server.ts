@@ -251,7 +251,7 @@ function getModelName(customModel?: string, customApiKey?: string, customBaseUrl
     : (settings.model && settings.model.trim() !== '' ? settings.model.trim() : '');
 
   if (isGateway) {
-    if (rawModel && (rawModel === 'gemini-3.5-flash' || rawModel === 'pcg-auto-pro' || rawModel === 'gemini-2.5-pro' || rawModel === 'claude-sonnet-5' || rawModel === 'gpt-5.4' || rawModel === 'Standard' || rawModel === 'Pro' || rawModel === 'Expert')) {
+    if (rawModel && (rawModel === 'gemini-3.5-flash' || rawModel === 'gemini-3.7-flash' || rawModel === 'pcg-auto-pro' || rawModel === 'gemini-2.5-pro' || rawModel === 'claude-sonnet-5' || rawModel === 'gpt-5.4' || rawModel === 'Standard' || rawModel === 'Pro' || rawModel === 'Expert')) {
       return rawModel === 'Standard' || rawModel === 'Pro' || rawModel === 'Expert' ? 'gemini-3.5-flash' : rawModel;
     }
     return "gemini-3.5-flash";
@@ -1310,6 +1310,25 @@ function removeCompletedTaskRecommendations(text: string, completedTitles: strin
   return before + section + text.slice(sectionEnd);
 }
 
+function removeStaleNextStepsFromProjectStatus(text: string, completedTitles: string[]): string {
+  if (completedTitles.length === 0) return text;
+  const sec2Start = text.search(/^## 2\.\s/m);
+  if (sec2Start < 0) return text;
+  const sec2End = text.search(/^## 3\.\s/m);
+  const section = text.slice(sec2Start, sec2End >= 0 ? sec2End : text.length);
+
+  const cleaned = section.replace(
+    /(\*\*Nächste Schritte:\*\*\s*)([^\n•]+)/gi,
+    (_match, prefix: string, body: string) => {
+      const sentences = body.split(/(?<=\.)\s+/).filter((s: string) => s.trim());
+      const kept = sentences.filter((s: string) => !completedTitles.some(c => areTaskTextsSimilar(s, c)));
+      return kept.length > 0 ? prefix + kept.join(' ') : '';
+    }
+  );
+
+  return text.slice(0, sec2Start) + cleaned + (sec2End >= 0 ? text.slice(sec2End) : '');
+}
+
 function applyAuthoritativeProjectCorrections(text: string): string {
   return text.replace(
     /(^|\n)(- \*\*SUSE\*\*[\s\S]*?)(?=\n- \*\*|\n---|$)/gi,
@@ -1322,6 +1341,7 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
   text = applyCanonicalSpellingCorrections(text);
   text = applyAuthoritativeProjectCorrections(text);
   const taskStates = extractGoogleTaskStates(tasksContext);
+  text = removeStaleNextStepsFromProjectStatus(text, taskStates.completed);
   if (!text.includes('<ACTION_PROPOSALS>')) {
     text = removeCompletedTaskRecommendations(text, taskStates.completed);
     text = convertMarkdownTablesToCleanText(text);
