@@ -473,14 +473,14 @@ async function cmdStatus() {
   console.log(`Google Client ID:     ${clientId ? 'vorhanden' : 'FEHLT'}`);
   console.log(`Client Secret:        ${process.env.GOOGLE_CLIENT_SECRET ? 'vorhanden' : 'nicht benötigt'}`);
 
-  const accessToken = loadStoredToken();
-  if (refreshToken && accessToken) {
+  if (refreshToken) {
     try {
-      const oauth2 = google.oauth2({ version: 'v2', auth: getOAuth2Client(accessToken) });
-      const info = await oauth2.userinfo.get();
-      console.log(`Angemeldet als:       ${info.data.email}`);
+      const accessToken = await getAccessToken();
+      const gmail = google.gmail({ version: 'v1', auth: getOAuth2Client(accessToken) });
+      const profile = await gmail.users.getProfile({ userId: 'me' });
+      console.log(`Angemeldet als:       ${profile.data.emailAddress}`);
     } catch (err: any) {
-      console.log('Access-Token vorhanden, aber Prüfung fehlgeschlagen:', err?.message || err);
+      console.log('Google-Anmeldung konnte nicht geprüft werden:', err?.message || err);
     }
   }
 
