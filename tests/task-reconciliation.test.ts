@@ -42,6 +42,25 @@ test('does not create a duplicate for an open task', () => {
   assert.match(result, /Anderen neuen Punkt pruefen/);
 });
 
+test('matches real-world title variants despite details and spelling differences', () => {
+  const realTasks = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
+OFFEN:
+- [OFFEN] Dennis KSGR sauber aufsetzen und fragt nach best practices, da sein erstes Projekt hier | Liste: My Tasks
+- [OFFEN] Projektleitung Nestlim anfragen: Kontaktiere Nestlim bezueglich der Uebernahme der Projektleitung fuer Koenig und Bauer | Liste: My Tasks
+ERLEDIGT:`;
+  const text = `<ACTION_PROPOSALS>
+[
+  {"type":"task","title":"Dennis KSGR: Best Practices bereitstellen","details":{"title":"Dennis KSGR: Best Practices fuer Projekt-Setup bereitstellen","notes":"Jira und Confluence erklaeren"}},
+  {"type":"task","title":"Projektleitung Neslim anfragen fuer Koenig & Bauer","details":{"title":"Projektleitung Neslim anfragen fuer Koenig & Bauer","notes":"Verfuegbarkeit pruefen"}}
+]
+</ACTION_PROPOSALS>`;
+
+  const result = sanitizeActionProposals(text, realTasks, '');
+
+  assert.doesNotMatch(result, /Dennis KSGR/);
+  assert.doesNotMatch(result, /Projektleitung Neslim/);
+});
+
 test('filters completed recommendations without an action block', () => {
   const text = `## 4. Konkrete naechste Schritte
 - **FNTV Cloud Function Timeout Alert pruefen** - Faellig: heute

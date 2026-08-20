@@ -1083,6 +1083,25 @@ async function getFileContent(drive: any, fileId: string, mimeType: string) {
   }
 }
 
+function loadLocalMemoryContext(): string {
+  try {
+    const memDir = path.join(process.cwd(), 'agent-memory');
+    if (!fs.existsSync(memDir)) return "(Kein lokales Nutzer-Memory vorhanden.)\n";
+    const memoryFiles = fs.readdirSync(memDir);
+    let memoryText = "AUTORITATIVES NUTZER-MEMORY (neueste explizite Korrekturen; überschreibt widersprüchliche ältere Quellen):\n";
+    for (const memoryFile of memoryFiles) {
+      if (memoryFile.startsWith('.') || /token|secret|credential/i.test(memoryFile)) continue;
+      if (memoryFile.endsWith('.md') || memoryFile.endsWith('.txt') || memoryFile.endsWith('.json')) {
+        const content = fs.readFileSync(path.join(memDir, memoryFile), 'utf-8');
+        memoryText += `--- NUTZER-MEMORY: "${memoryFile}" ---\n${content}\n\n`;
+      }
+    }
+    return memoryText;
+  } catch {
+    return "(Lokales Nutzer-Memory konnte nicht geladen werden.)\n";
+  }
+}
+
 export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
   try {
     const drive = await getDriveClient(accessToken);
@@ -1211,25 +1230,7 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
         contextData += `--- DOKUMENT / TRANSKRIPT / VORBEREITUNG: "${file.path || file.name}" | Direktlink: ${docUrl}${prepHighlight}${ageNotice} ---\n${truncated}\n\n`;
       }
     }
-    function loadLocalMemory(): string {
-      try {
-        const memDir = path.join(process.cwd(), 'agent-memory');
-        if (!fs.existsSync(memDir)) return "";
-        const mFiles = fs.readdirSync(memDir);
-        let memText = "";
-        for (const mf of mFiles) {
-          if (mf.endsWith('.md') || mf.endsWith('.txt') || mf.endsWith('.json')) {
-            const content = fs.readFileSync(path.join(memDir, mf), 'utf-8');
-            memText += `--- LOKALES MEMORY: "${mf}" ---\n${content}\n\n`;
-          }
-        }
-        return memText;
-      } catch {
-        return "";
-      }
-    }
-
-    const localMem = loadLocalMemory();
+    const localMem = loadLocalMemoryContext();
     return (localMem + contextData) || "(Keine Dokumente, Meeting-Protokolle oder Transkripte im Google Drive gefunden.)\n";
   } catch (e: any) {
     console.warn("Drive knowledge base fetch notice:", e?.message || e);
@@ -1277,7 +1278,9 @@ function areTaskTextsSimilar(first: string, second: string): boolean {
   const bWords = new Set(b.split(' '));
   const common = [...aWords].filter(word => bWords.has(word)).length;
   const smallerSize = Math.min(aWords.size, bWords.size);
-  return common >= 2 && smallerSize > 0 && common / smallerSize >= 0.65;
+  if (smallerSize === 0) return false;
+  const overlap = common / smallerSize;
+  return (common >= 3 && overlap >= 0.5) || (common >= 2 && overlap >= 0.8);
 }
 
 function extractGoogleTaskStates(tasksContext?: string): { open: string[]; completed: string[] } {
@@ -1352,8 +1355,8 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
         const titleLower = (p.title || p.details?.title || '').toLowerCase().trim();
         const notesLower = (p.details?.notes || p.details?.body || '').toLowerCase().trim();
 
-        const proposalText = `${titleLower} ${notesLower}`.trim();
-        const matchesCompletedTask = taskStates.completed.some(completed => areTaskTextsSimilar(proposalText, completed));
+        const proposalTitle = (p.details?.title || p.title || '').toLowerCase().trim();
+        const matchesCompletedTask = taskStates.completed.some(completed => areTaskTextsSimilar(proposalTitle, completed));
         if (matchesCompletedTask) {
           console.log(`[Completed Task Filter] Removed proposal matching completed Google Task: "${p.title}"`);
           modified = true;
@@ -1395,7 +1398,7 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
         }
 
         // Existing open tasks remain authoritative and must not be duplicated by any action proposal.
-        if (taskStates.open.some(open => areTaskTextsSimilar(proposalText, open))) {
+        if (taskStates.open.some(open => areTaskTextsSimilar(proposalTitle, open))) {
           console.log(`[Open Task Deduplication] Removed proposal matching open Google Task: "${p.title}"`);
           modified = true;
           continue;
@@ -1956,6 +1959,7 @@ app.post('/api/agent/chat', async (req, res) => {
     const eventsContext = await fetchUpcomingEvents(oauth2Client);
     const chatsContext = await fetchRecentChats(oauth2Client);
     const tasksContext = await fetchTasks(oauth2Client);
+    const localMemoryContext = loadLocalMemoryContext();
 
     // Check if there is an existing canonical daily update for today
     const dateStr = new Date().toISOString().split('T')[0];
@@ -2092,6 +2096,9 @@ ${chatsContext}
 
 ${tasksContext}
 
+WIEDERHOLTE AUTORITATIVE NUTZERKORREKTUREN (bei Konflikten zwingend anwenden):
+${localMemoryContext}
+
 Antworte basierend auf diesen Dokumenten. Wenn die Informationen nicht vorhanden sind, gib dies klar an. Keine externen Informationen erfinden. ggf. auf Quellen hinweisen`;
 
     const response = await generateAIContent({
@@ -2170,6 +2177,7 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
   const eventsContext = await fetchUpcomingEvents(oauth2Client);
   const chatsContext = await fetchRecentChats(oauth2Client);
   const tasksContext = await fetchTasks(oauth2Client);
+  const localMemoryContext = loadLocalMemoryContext();
 
   const nowStr = new Date().toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' });
 
@@ -2232,6 +2240,9 @@ ${chatsContext}
 
 --- TO-DOS ---
 ${tasksContext}
+
+--- AUTORITATIVE NUTZERKORREKTUREN (ÜBERSCHREIBEN ÄLTERE QUELLEN) ---
+${localMemoryContext}
 `;
 
   const response = await generateAIContent({
