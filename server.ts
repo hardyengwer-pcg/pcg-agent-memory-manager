@@ -252,7 +252,7 @@ function getModelName(customModel?: string, customApiKey?: string, customBaseUrl
 
   if (isGateway) {
     if (rawModel && (rawModel === 'gemini-3.5-flash' || rawModel === 'gemini-3.7-flash' || rawModel === 'pcg-auto-pro' || rawModel === 'gemini-2.5-pro' || rawModel === 'claude-sonnet-5' || rawModel === 'gpt-5.4' || rawModel === 'Standard' || rawModel === 'Pro' || rawModel === 'Expert')) {
-      return rawModel === 'Standard' || rawModel === 'Pro' || rawModel === 'Expert' ? 'gemini-3.5-flash' : rawModel;
+      return rawModel;
     }
     return "gemini-3.5-flash";
   } else {
