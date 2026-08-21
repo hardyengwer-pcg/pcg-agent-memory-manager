@@ -1113,41 +1113,57 @@ function loadLocalMemoryContext(): string {
 }
 
 export async function syncLocalMemoryToDrive(accessToken: string): Promise<string[]> {
-  const syncedFiles: string[] = [];
   const memDir = path.join(process.cwd(), 'agent-memory');
-  if (!fs.existsSync(memDir)) return syncedFiles;
+  if (!fs.existsSync(memDir)) return [];
 
   const drive = await getDriveClient(accessToken);
-  const filesRes = await drive.files.list({
-    q: `'${driveFolderId}' in parents and trashed=false`,
-    fields: 'files(id,name,mimeType)',
-    pageSize: 100,
-  });
-  const existingFiles = new Map<string, string>();
-  for (const file of filesRes.data.files || []) {
-    if (file.id && file.name) existingFiles.set(file.name, file.id);
-  }
+  const syncedFiles: string[] = [];
 
-  for (const memoryFile of fs.readdirSync(memDir)) {
-    if (memoryFile.startsWith('.') || /token|secret|credential/i.test(memoryFile)) continue;
-    if (!/\.(md|txt|json)$/i.test(memoryFile)) continue;
-
-    const body = fs.readFileSync(path.join(memDir, memoryFile), 'utf-8');
-    const mimeType = memoryFile.toLowerCase().endsWith('.md') ? 'text/markdown' : 'text/plain';
-    const media = { mimeType, body };
-    const fileId = existingFiles.get(memoryFile);
-
-    if (fileId) {
-      await drive.files.update({ fileId, media });
-    } else {
-      await drive.files.create({
-        requestBody: { name: memoryFile, parents: [driveFolderId], mimeType },
-        media,
-      });
+  const syncDirectory = async (localDir: string, parentId: string, relativeDir: string): Promise<void> => {
+    const filesRes = await drive.files.list({
+      q: `'${parentId}' in parents and trashed=false`,
+      fields: 'files(id,name,mimeType)',
+      pageSize: 100,
+    });
+    const existingFiles = new Map<string, { id: string; mimeType?: string }>();
+    for (const file of filesRes.data.files || []) {
+      if (file.id && file.name) existingFiles.set(file.name, { id: file.id, mimeType: file.mimeType });
     }
-    syncedFiles.push(memoryFile);
-  }
 
+    for (const entry of fs.readdirSync(localDir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || /token|secret|credential/i.test(entry.name)) continue;
+      const localPath = path.join(localDir, entry.name);
+      const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+
+      if (entry.isDirectory()) {
+        let folderId = existingFiles.get(entry.name)?.id;
+        if (!folderId) {
+          const folder = await drive.files.create({
+            requestBody: { name: entry.name, parents: [parentId], mimeType: 'application/vnd.google-apps.folder' },
+            fields: 'id',
+          });
+          folderId = folder.data.id || '';
+        }
+        if (folderId) await syncDirectory(localPath, folderId, relativePath);
+        continue;
+      }
+
+      if (!/\.(md|txt|json)$/i.test(entry.name)) continue;
+      const body = fs.readFileSync(localPath, 'utf-8');
+      const mimeType = entry.name.toLowerCase().endsWith('.md') ? 'text/markdown' : 'text/plain';
+      const media = { mimeType, body };
+      const fileId = existingFiles.get(entry.name)?.id;
+
+      if (fileId) {
+        await drive.files.update({ fileId, media });
+      } else {
+        await drive.files.create({ requestBody: { name: entry.name, parents: [parentId], mimeType }, media });
+      }
+      syncedFiles.push(relativePath);
+    }
+  };
+
+  await syncDirectory(memDir, driveFolderId, '');
   return syncedFiles;
 }
 

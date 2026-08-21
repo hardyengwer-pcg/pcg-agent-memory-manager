@@ -34,7 +34,9 @@ npm run agent -- daily
 
 Der Lauf sammelt Workspace-Kontext, erstellt ein Briefing, speichert es in Drive, sendet eine Zusammenfassung per E-Mail und kann Aufgaben ableiten.
 
-Vor der Analyse synchronisiert der Lauf die strukturierten Dateien aus dem lokalen `agent-memory/`-Ordner (z. B. `tasks.md`) in den konfigurierten Drive-Memory-Ordner. Diese Dateien bleiben die autoritative lokale Quelle; Token- und Geheimdateien werden nicht synchronisiert.
+Vor der Analyse synchronisiert der Lauf die strukturierten OKF-Dateien aus dem lokalen `agent-memory/`-Ordner (inklusive Unterordner) in den konfigurierten Drive-Memory-Ordner. Diese Dateien bleiben die autoritative lokale Quelle; Token- und Geheimdateien werden nicht synchronisiert.
+
+Das Bundle folgt OKF v0.2: `index.md` beschreibt den Bestand, `log.md` dokumentiert Änderungen und Konzeptdateien wie `tasks.md` enthalten YAML-Frontmatter mit Typ, Quellen, Lifecycle und Erzeugungsmetadaten.
 
 ## Windows Task Scheduler
 
