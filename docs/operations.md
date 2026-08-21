@@ -34,6 +34,8 @@ npm run agent -- daily
 
 Der Lauf sammelt Workspace-Kontext, erstellt ein Briefing, speichert es in Drive, sendet eine Zusammenfassung per E-Mail und kann Aufgaben ableiten.
 
+Vor der Analyse synchronisiert der Lauf die strukturierten Dateien aus dem lokalen `agent-memory/`-Ordner (z. B. `tasks.md`) in den konfigurierten Drive-Memory-Ordner. Diese Dateien bleiben die autoritative lokale Quelle; Token- und Geheimdateien werden nicht synchronisiert.
+
 ## Windows Task Scheduler
 
 `run-agent.cmd` ist ein Wrapper mit Logdatei. `run-agent-hidden.vbs` startet ihn ohne sichtbares Konsolenfenster.

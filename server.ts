@@ -1112,6 +1112,45 @@ function loadLocalMemoryContext(): string {
   }
 }
 
+export async function syncLocalMemoryToDrive(accessToken: string): Promise<string[]> {
+  const syncedFiles: string[] = [];
+  const memDir = path.join(process.cwd(), 'agent-memory');
+  if (!fs.existsSync(memDir)) return syncedFiles;
+
+  const drive = await getDriveClient(accessToken);
+  const filesRes = await drive.files.list({
+    q: `'${driveFolderId}' in parents and trashed=false`,
+    fields: 'files(id,name,mimeType)',
+    pageSize: 100,
+  });
+  const existingFiles = new Map<string, string>();
+  for (const file of filesRes.data.files || []) {
+    if (file.id && file.name) existingFiles.set(file.name, file.id);
+  }
+
+  for (const memoryFile of fs.readdirSync(memDir)) {
+    if (memoryFile.startsWith('.') || /token|secret|credential/i.test(memoryFile)) continue;
+    if (!/\.(md|txt|json)$/i.test(memoryFile)) continue;
+
+    const body = fs.readFileSync(path.join(memDir, memoryFile), 'utf-8');
+    const mimeType = memoryFile.toLowerCase().endsWith('.md') ? 'text/markdown' : 'text/plain';
+    const media = { mimeType, body };
+    const fileId = existingFiles.get(memoryFile);
+
+    if (fileId) {
+      await drive.files.update({ fileId, media });
+    } else {
+      await drive.files.create({
+        requestBody: { name: memoryFile, parents: [driveFolderId], mimeType },
+        media,
+      });
+    }
+    syncedFiles.push(memoryFile);
+  }
+
+  return syncedFiles;
+}
+
 export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
   try {
     const drive = await getDriveClient(accessToken);
@@ -2212,6 +2251,13 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
   }
 
   const dateStr = new Date().toISOString().split('T')[0];
+
+  try {
+    const syncedMemoryFiles = await syncLocalMemoryToDrive(accessToken);
+    console.log(`[Memory Sync] ${syncedMemoryFiles.length} strukturierte Datei(en) nach Drive synchronisiert.`);
+  } catch (memoryErr: any) {
+    console.warn('[Memory Sync] Drive-Synchronisierung übersprungen:', memoryErr?.message || memoryErr);
+  }
 
   // Always perform a live, fresh evaluation of all connected Google Workspace sources
   console.log(`[Daily Briefing] Performing live real-time analysis for ${dateStr}...`);
