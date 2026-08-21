@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractDavidOneOnOneAgenda, sanitizeActionProposals } from '../server.ts';
+import { extractDavidOneOnOneAgenda, normalizeStructuredMemoryCategories, sanitizeActionProposals } from '../server.ts';
 
 const tasksContext = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
 OFFEN:
@@ -15,6 +15,20 @@ test('always exposes Besprechung David as the dedicated 1:1 agenda source', () =
   assert.match(result, /Besprechung David/);
   assert.match(result, /Lorenz, Staffing und Odoo klären/);
   assert.match(result, /bei jeder Vorbereitung eines David-Termins berücksichtigt/);
+});
+
+test('separates concrete customer engagements into projects', () => {
+  const [concept] = normalizeStructuredMemoryCategories([{
+    category: 'customers',
+    slug: 'koenig-und-bauer',
+    type: 'Customer',
+    title: 'Koenig & Bauer',
+    description: 'Kundenprojekt',
+    body: 'Das SOW und die Projektbudgetklärung laufen weiter.',
+  }]);
+
+  assert.equal(concept.category, 'projects');
+  assert.equal(concept.type, 'Project');
 });
 
 test('removes completed task from recommendations and proposals', () => {

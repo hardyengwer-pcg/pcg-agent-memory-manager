@@ -1167,6 +1167,222 @@ export async function syncLocalMemoryToDrive(accessToken: string): Promise<strin
   return syncedFiles;
 }
 
+type StructuredMemoryConcept = {
+  category: 'projects' | 'customers' | 'squad' | 'general';
+  slug: string;
+  type: string;
+  title: string;
+  description: string;
+  tags?: string[];
+  status?: 'draft' | 'stable' | 'deprecated';
+  stale_after?: string;
+  body: string;
+  sources?: { id?: string; resource: string; title?: string }[];
+};
+
+function slugifyMemoryTitle(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'concept';
+}
+
+function parseStructuredMemoryResponse(text: string): StructuredMemoryConcept[] {
+  const jsonBlock = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1] || text.match(/\[[\s\S]*\]/)?.[0];
+  if (!jsonBlock) return [];
+
+  try {
+    const parsed = JSON.parse(jsonBlock);
+    if (!Array.isArray(parsed)) return [];
+    const allowedCategories = new Set<StructuredMemoryConcept['category']>(['projects', 'customers', 'squad', 'general']);
+    return parsed.filter((item): item is StructuredMemoryConcept =>
+      item && allowedCategories.has(item.category) && typeof item.title === 'string' && typeof item.body === 'string'
+    ).slice(0, 20);
+  } catch {
+    return [];
+  }
+}
+
+export function normalizeStructuredMemoryCategories(concepts: StructuredMemoryConcept[]): StructuredMemoryConcept[] {
+  const projectSignals = /\b(projekt|project|sow|statement of work|migration|migrat|poc|proof of concept|showcase|rollout|fieldservice|budget|funding|workstream|service-konto|systemanalyse|architektur|pipeline|deliverable|liefer)\b/i;
+  return concepts.map(concept => {
+    const searchable = `${concept.title} ${concept.description} ${concept.body}`;
+    if (concept.category === 'customers' && projectSignals.test(searchable)) {
+      return { ...concept, category: 'projects', type: 'Project' };
+    }
+    return concept;
+  });
+}
+
+function renderStructuredMemoryConcept(concept: StructuredMemoryConcept, generatedAt: string): string {
+  const clean = (value: string) => value.replace(/[\r\n]+/g, ' ').trim();
+  const tags = (concept.tags || []).filter(tag => typeof tag === 'string').map(tag => clean(tag)).filter(Boolean);
+  const sources = (concept.sources || []).filter(source => source && typeof source.resource === 'string' && source.resource.trim());
+  const lines = [
+    '---',
+    `type: ${clean(concept.type || 'Reference')}`,
+    `title: ${clean(concept.title)}`,
+    `description: ${clean(concept.description || concept.title)}`,
+    `tags: [${tags.join(', ')}]`,
+    `status: ${concept.status || 'stable'}`,
+    `generated: { by: process:pcg-agent-memory-manager, at: ${generatedAt} }`,
+    `verified: { by: process:pcg-agent-memory-manager, at: ${generatedAt} }`,
+  ];
+  if (concept.stale_after && /^\d{4}-\d{2}-\d{2}T/.test(concept.stale_after)) {
+    lines.push(`stale_after: ${concept.stale_after}`);
+  }
+  if (sources.length > 0) {
+    lines.push('sources:');
+    for (const source of sources.slice(0, 8)) {
+      lines.push(`  - id: ${clean(source.id || slugifyMemoryTitle(source.title || source.resource))}`);
+      lines.push(`    resource: ${clean(source.resource)}`);
+      if (source.title) lines.push(`    title: ${clean(source.title)}`);
+    }
+  }
+  lines.push('---', '', concept.body.trim(), '');
+  return lines.join('\n');
+}
+
+function updateStructuredMemoryIndex(concepts: StructuredMemoryConcept[]): void {
+  const memDir = path.join(process.cwd(), 'agent-memory');
+  const byCategory = new Map<StructuredMemoryConcept['category'], StructuredMemoryConcept[]>();
+  const categories: StructuredMemoryConcept['category'][] = ['projects', 'customers', 'squad', 'general'];
+  for (const category of categories) {
+    const categoryDir = path.join(memDir, category);
+    if (!fs.existsSync(categoryDir)) continue;
+    for (const fileName of fs.readdirSync(categoryDir).filter(file => file.endsWith('.md'))) {
+      const filePath = path.join(categoryDir, fileName);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const title = content.match(/^title:\s*(.+)$/m)?.[1]?.trim() || fileName.replace(/\.md$/, '');
+      const description = content.match(/^description:\s*(.+)$/m)?.[1]?.trim() || 'Kuratiertes Memory-Konzept.';
+      const list = byCategory.get(category) || [];
+      list.push({ category, slug: fileName.replace(/\.md$/, ''), type: 'Reference', title, description, body: '' });
+      byCategory.set(category, list);
+    }
+  }
+  for (const concept of concepts) {
+    const list = byCategory.get(concept.category) || [];
+    const existingIndex = list.findIndex(item => item.slug === concept.slug);
+    if (existingIndex >= 0) list[existingIndex] = concept;
+    else list.push(concept);
+    byCategory.set(concept.category, list);
+  }
+
+  const categoryLabels: Record<StructuredMemoryConcept['category'], string> = {
+    projects: 'Projektbezogene Themen',
+    customers: 'Kundenbezogene Themen',
+    squad: 'Squad- und Teamthemen',
+    general: 'Allgemeine Themen und Regeln',
+  };
+  const lines = [
+    '---',
+    'okf_version: "0.2"',
+    '---',
+    '',
+    '# PCG Agent Memory',
+    '',
+    'Strukturiertes OKF-v0.2-Memory aus Workspace-Quellen. Google Tasks bleiben für Aufgabenstatus autoritativ.',
+    '',
+    '## Dauerhafte Referenzen',
+    '',
+    '- [Aktive Aufgaben und Memory-Regeln](tasks.md) - Autoritative Aufgaben- und Briefing-Regeln.',
+    '- [Änderungslog](log.md) - Chronologische Änderungen an diesem Bundle.',
+  ];
+  for (const category of Object.keys(categoryLabels) as StructuredMemoryConcept['category'][]) {
+    lines.push('', `## ${categoryLabels[category]}`, '');
+    const categoryConcepts = byCategory.get(category) || [];
+    if (categoryConcepts.length === 0) {
+      lines.push('- Noch keine kuratierten Konzepte.');
+    } else {
+      for (const concept of categoryConcepts.sort((a, b) => a.title.localeCompare(b.title))) {
+        lines.push(`- [${concept.title}](${category}/${slugifyMemoryTitle(concept.slug || concept.title)}.md) - ${concept.description || 'Kuratiertes Memory-Konzept.'}`);
+      }
+    }
+  }
+  fs.writeFileSync(path.join(memDir, 'index.md'), `${lines.join('\n')}\n`, 'utf-8');
+}
+
+function appendStructuredMemoryLog(concepts: StructuredMemoryConcept[], generatedAt: string): void {
+  const logPath = path.join(process.cwd(), 'agent-memory', 'log.md');
+  const date = generatedAt.slice(0, 10);
+  const entries = concepts.map(concept => `* **Update**: ${concept.category}/${slugifyMemoryTitle(concept.slug || concept.title)}.md aktualisiert.`).join('\n');
+  const existing = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf-8') : '# Directory Update Log\n';
+  fs.writeFileSync(logPath, `${existing.trimEnd()}\n\n## ${date}\n\n${entries || '* **Update**: Kein neues Konzept erzeugt.'}\n`, 'utf-8');
+}
+
+export async function generateStructuredMemoryConcepts(input: {
+  driveContext: string;
+  emailsContext: string;
+  eventsContext: string;
+  chatsContext: string;
+  tasksContext: string;
+  localMemoryContext: string;
+}): Promise<string[]> {
+  const generatedAt = new Date().toISOString();
+  const response = await generateAIContent({
+    contents: `Erzeuge aus dem folgenden Workspace-Kontext ein kuratiertes OKF-v0.2-Memory. Gib ausschließlich valides JSON als Array zurück.
+
+Jedes Element muss diese Form haben:
+{"category":"projects|customers|squad|general","slug":"stabiler-kebab-case-name","type":"Project|Customer|Squad Topic|Reference","title":"...","description":"Ein Satz.","tags":["..."],"status":"stable","body":"Markdown mit aktuellem Stand, offenen Punkten und relevanten Regeln.","sources":[{"id":"...","resource":"https://...","title":"..."}]}
+
+Regeln:
+- Erzeuge nur dauerhaft nützliche Konzepte, maximal 20.
+- Trenne strikt: Projekte nach projects/, Kundenthemen nach customers/, Squad-/Teamthemen nach squad/, allgemeine Regeln nach general/.
+- Keine erledigten Aufgaben als offen darstellen. Google Tasks mit [ERLEDIGT] sind endgültig erledigt; [OFFEN] bleibt aktiv.
+- Keine neuen Aufgaben erfinden. Dokumentiere offene Aufgaben nur, wenn sie aus den Quellen stammen.
+- Bevorzuge aktuelle, wiederverwendbare Fakten gegenüber einem Tagesbericht.
+- Jede wichtige Aussage muss im Body oder in den sources auf eine Quelle zurückführbar sein.
+- Wenn keine belastbare Quelle existiert, lasse das Konzept weg.
+
+--- DRIVE ---
+${input.driveContext}
+--- E-MAILS ---
+${input.emailsContext}
+--- KALENDER ---
+${input.eventsContext}
+--- CHATS ---
+${input.chatsContext}
+--- GOOGLE TASKS ---
+${input.tasksContext}
+--- LOKALES MEMORY ---
+${input.localMemoryContext}`,
+    config: {
+      temperature: 0.0,
+      systemInstruction: 'Du bist ein präziser Memory-Kurator. Schreibe keine Tageszusammenfassung und keine ACTION_PROPOSALS. Liefere ausschließlich JSON.',
+    },
+  });
+
+  const concepts = normalizeStructuredMemoryCategories(parseStructuredMemoryResponse(response.text || '')).map(concept => ({
+    ...concept,
+    slug: slugifyMemoryTitle(concept.slug || concept.title),
+  }));
+  if (concepts.length === 0) return [];
+
+  const memDir = path.join(process.cwd(), 'agent-memory');
+  for (const category of ['projects', 'customers', 'squad', 'general']) {
+    const categoryDir = path.join(memDir, category);
+    if (!fs.existsSync(categoryDir)) continue;
+    for (const fileName of fs.readdirSync(categoryDir)) {
+      if (fileName.endsWith('.md')) fs.unlinkSync(path.join(categoryDir, fileName));
+    }
+  }
+  for (const concept of concepts) {
+    const categoryDir = path.join(memDir, concept.category);
+    fs.mkdirSync(categoryDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(categoryDir, `${concept.slug}.md`),
+      renderStructuredMemoryConcept(concept, generatedAt),
+      'utf-8'
+    );
+  }
+  updateStructuredMemoryIndex(concepts);
+  appendStructuredMemoryLog(concepts, generatedAt);
+  return concepts.map(concept => `${concept.category}/${concept.slug}.md`);
+}
+
 export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
   try {
     const drive = await getDriveClient(accessToken);
@@ -2390,6 +2606,22 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
   });
 
   const summary = sanitizeActionProposals(response.text || "Kein Update generiert.", tasksContext, eventsContext);
+
+  try {
+    const generatedMemoryFiles = await generateStructuredMemoryConcepts({
+      driveContext,
+      emailsContext,
+      eventsContext,
+      chatsContext,
+      tasksContext,
+      localMemoryContext,
+    });
+    console.log(`[Memory Curation] ${generatedMemoryFiles.length} OKF-Konzept(e) aktualisiert.`);
+    const syncedMemoryFiles = await syncLocalMemoryToDrive(accessToken);
+    console.log(`[Memory Sync] ${syncedMemoryFiles.length} strukturierte Datei(en) nach Drive synchronisiert.`);
+  } catch (memoryErr: any) {
+    console.warn('[Memory Curation] Strukturierte Memory-Aktualisierung übersprungen:', memoryErr?.message || memoryErr);
+  }
 
   let createdTasks: { title: string; id?: string; error?: string }[] = [];
   if (options.autoCreateTasks) {
