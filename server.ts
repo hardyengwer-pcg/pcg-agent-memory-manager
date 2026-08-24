@@ -1112,6 +1112,29 @@ function loadLocalMemoryContext(): string {
   }
 }
 
+const AVAILABLE_SKILLS: Record<string, string> = {
+  'okf-memory-curation': 'okf-memory-curation.md',
+  'workspace-context-ingestion': 'workspace-context-ingestion.md',
+  'task-state-reconciliation': 'task-state-reconciliation.md',
+  'david-one-on-one-preparation': 'david-one-on-one-preparation.md',
+  'daily-management-briefing': 'daily-management-briefing.md',
+  'project-and-customer-status': 'project-and-customer-status.md',
+  'chat-command-safety': 'chat-command-safety.md',
+};
+
+export function loadSkillContext(skillNames: string[]): string {
+  const skillsDir = path.join(process.cwd(), 'skills');
+  const sections: string[] = [];
+  for (const skillName of [...new Set(skillNames)]) {
+    const fileName = AVAILABLE_SKILLS[skillName];
+    if (!fileName) continue;
+    const skillPath = path.join(skillsDir, fileName);
+    if (!fs.existsSync(skillPath)) continue;
+    sections.push(`--- SKILL: ${skillName} ---\n${fs.readFileSync(skillPath, 'utf-8').trim()}`);
+  }
+  return sections.length > 0 ? sections.join('\n\n') : '(Keine passenden Skills geladen.)';
+}
+
 export async function syncLocalMemoryToDrive(accessToken: string): Promise<string[]> {
   const memDir = path.join(process.cwd(), 'agent-memory');
   if (!fs.existsSync(memDir)) return [];
@@ -1322,8 +1345,17 @@ export async function generateStructuredMemoryConcepts(input: {
   localMemoryContext: string;
 }): Promise<string[]> {
   const generatedAt = new Date().toISOString();
+  const skillContext = loadSkillContext([
+    'okf-memory-curation',
+    'workspace-context-ingestion',
+    'task-state-reconciliation',
+    'project-and-customer-status',
+  ]);
   const response = await generateAIContent({
     contents: `Erzeuge aus dem folgenden Workspace-Kontext ein kuratiertes OKF-v0.2-Memory. Gib ausschließlich valides JSON als Array zurück.
+
+Die folgenden Skills sind verbindliche Arbeitsanweisungen für diese Kuration:
+${skillContext}
 
 Jedes Element muss diese Form haben:
 {"category":"projects|customers|squad|general","slug":"stabiler-kebab-case-name","type":"Project|Customer|Squad Topic|Reference","title":"...","description":"Ein Satz.","tags":["..."],"status":"stable","body":"Markdown mit aktuellem Stand, offenen Punkten und relevanten Regeln.","sources":[{"id":"...","resource":"https://...","title":"..."}]}
@@ -2270,6 +2302,13 @@ app.post('/api/agent/chat', async (req, res) => {
     const tasksContext = await fetchTasks(oauth2Client);
     const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
     const localMemoryContext = loadLocalMemoryContext();
+    const skillContext = loadSkillContext([
+      'workspace-context-ingestion',
+      'task-state-reconciliation',
+      'david-one-on-one-preparation',
+      'project-and-customer-status',
+      'chat-command-safety',
+    ]);
 
     // Check if there is an existing canonical daily update for today
     const dateStr = new Date().toISOString().split('T')[0];
@@ -2389,9 +2428,12 @@ WICHTIGE FOKUS- & BRIEFING-REGELN:
      5. Wurde "Thursdays for Data" silent ignoriert und KEIN "Punkt 4: Ignorierte interne Termine" erzeugt?
      6. Sind alle Quellenangaben als anklickbare Markdown-Links formatiert?
 
-Rolle: Strategischer Sparringspartner und hochgradig organisierter Operations-Assistent im Cloud- & KI-Umfeld angepasst auf die PCG Squad Lead Rolle. 
+ Rolle: Strategischer Sparringspartner und hochgradig organisierter Operations-Assistent im Cloud- & KI-Umfeld angepasst auf die PCG Squad Lead Rolle.
 Tonalität: Deutsch, prägnant, faktenbasiert, absolut management-tauglich.
-Fokus: Extrem proaktiv. Du wartest nicht auf Anweisungen, sondern schlägst konkrete Aktionen, Zuweisungen (Owner) und Deadlines vor. 
+ Fokus: Extrem proaktiv. Du wartest nicht auf Anweisungen, sondern schlägst konkrete Aktionen, Zuweisungen (Owner) und Deadlines vor.
+
+VERBINDLICHE SKILLS FÜR DIESE ANFRAGE:
+${skillContext}
 
 ${getActionProposalsInstruction()}
 ${todayCanonicalBriefing}
@@ -2501,10 +2543,20 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
   const tasksContext = await fetchTasks(oauth2Client);
   const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
   const localMemoryContext = loadLocalMemoryContext();
+  const skillContext = loadSkillContext([
+    'workspace-context-ingestion',
+    'task-state-reconciliation',
+    'david-one-on-one-preparation',
+    'daily-management-briefing',
+    'project-and-customer-status',
+  ]);
 
   const nowStr = new Date().toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' });
 
   const prompt = `Erstelle ein fokussiertes, tägliches Management-Briefing und Update basierend auf allen verknüpften Quellen (Google Drive Dokumente & Meeting-Protokolle, E-Mails, Kalender, Google Chat und Google Tasks).
+
+VERBINDLICHE SKILLS FÜR DIESES DAILY:
+${skillContext}
 
 WICHTIGE LAYOUT- & FORMATIERUNGSREGELN:
 - HEADER: Beginne direkt mit dem Briefing-Titel (z. B. "# ☀️ Tägliches Management-Update (${nowStr})") und einer prägnanten 2-3-Satz-Zusammenfassung der heutigen Prioritäten. KEINE Aufzählung von Datenquellen im Header!

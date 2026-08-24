@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractDavidOneOnOneAgenda, normalizeStructuredMemoryCategories, sanitizeActionProposals } from '../server.ts';
+import { extractDavidOneOnOneAgenda, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals } from '../server.ts';
 
 const tasksContext = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
 OFFEN:
@@ -29,6 +29,14 @@ test('separates concrete customer engagements into projects', () => {
 
   assert.equal(concept.category, 'projects');
   assert.equal(concept.type, 'Project');
+});
+
+test('loads only allowlisted workflow skills', () => {
+  const result = loadSkillContext(['task-state-reconciliation', '../server.ts', 'chat-command-safety']);
+
+  assert.match(result, /SKILL: task-state-reconciliation/);
+  assert.match(result, /SKILL: chat-command-safety/);
+  assert.doesNotMatch(result, /server\.ts/);
 });
 
 test('removes completed task from recommendations and proposals', () => {
