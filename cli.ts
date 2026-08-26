@@ -26,6 +26,9 @@ import {
   generateAIContent,
   formatAIError,
 } from './server.ts';
+import { searchVerbatimEvidence } from './verbatim-evidence-ledger.ts';
+import { queryTemporalTimeline, upsertTemporalFact } from './temporal-facts.ts';
+import { recordDecision, searchDecisions } from './decision-memory.ts';
 import { captureCurrentBrowserPage, compareBrowserPages } from './browser-mcp.ts';
 
 const ROOT = process.cwd();
@@ -635,6 +638,122 @@ async function cmdBrowserCompare(args: string[]) {
   console.log(result.result);
 }
 
+async function cmdEvidenceSearch(args: string[]) {
+  const query = args.filter((a) => !a.startsWith('--')).join(' ');
+  const sourceType = flagValue(args, '--source') as any;
+  const projectFilter = flagValue(args, '--project');
+  const limitStr = flagValue(args, '--limit');
+  const limit = limitStr ? Number(limitStr) : 5;
+
+  if (!query) {
+    console.error('Nutzung: npm run agent -- evidence-search "Suchbegriff" [--source drive|gmail|calendar|chat|tasks] [--project name] [--limit 5]');
+    process.exit(1);
+  }
+
+  const results = searchVerbatimEvidence({ query, sourceType, projectFilter, limit });
+  if (results.length === 0) {
+    console.log(`Keine passenden Quellen für "${query}" im Evidence Ledger gefunden.`);
+    return;
+  }
+
+  console.log(`\n${results.length} Treffer im Evidence Ledger für "${query}":\n`);
+  for (const r of results) {
+    const srcTime = r.record.sourceTimestamp ? ` | Stand: ${r.record.sourceTimestamp}` : '';
+    const srcUrl = r.record.sourceUrl ? `\n   Link: ${r.record.sourceUrl}` : '';
+    console.log(`• [${r.record.sourceType.toUpperCase()}] ${r.record.sourceId} (Score: ${r.score}${srcTime})${srcUrl}\n   Auszug: "${r.snippet}"\n`);
+  }
+}
+
+async function cmdFactUpsert(args: string[]) {
+  const subject = flagValue(args, '--subject');
+  const predicate = flagValue(args, '--predicate');
+  const object = flagValue(args, '--object');
+  const validFrom = flagValue(args, '--from');
+  const sourceUrl = flagValue(args, '--source-url');
+
+  if (!subject || !predicate || !object) {
+    console.error('Nutzung: npm run agent -- fact-upsert --subject "Panda" --predicate "capacity_status" --object "looking_for_projects" [--from ISO] [--source-url URL]');
+    process.exit(1);
+  }
+
+  const { fact, invalidatedCount } = upsertTemporalFact({ subject, predicate, object, validFrom, sourceUrl });
+  console.log(`\nFakt gespeichert (${fact.id}): ${fact.subject} -> ${fact.predicate} -> ${fact.object}`);
+  if (invalidatedCount > 0) {
+    console.log(`Automatisch invalidierte Vorläufer-Fakten: ${invalidatedCount}`);
+  }
+}
+
+async function cmdFactTimeline(args: string[]) {
+  const subject = flagValue(args, '--subject') || (args[0] && !args[0].startsWith('--') ? args[0] : undefined);
+  const predicate = flagValue(args, '--predicate');
+  const includeInvalidated = args.includes('--all');
+
+  const timeline = queryTemporalTimeline({ subject, predicate, includeInvalidated });
+  if (timeline.length === 0) {
+    console.log('Keine temporalen Fakten gefunden.');
+    return;
+  }
+
+  console.log(`\nTemporale Timeline (${timeline.length} Fakten):\n`);
+  for (const f of timeline) {
+    const validToStr = f.validTo ? ` bis ${f.validTo}` : ' (aktiv)';
+    const statusIcon = f.status === 'active' ? '🟢' : '⚪ (invalidiert)';
+    const sourceStr = f.sourceUrl ? `\n   Quelle: ${f.sourceUrl}` : '';
+    console.log(`${statusIcon} [${f.validFrom || f.createdAt}${validToStr}] ${f.subject} --(${f.predicate})--> ${f.object}${sourceStr}`);
+  }
+}
+
+async function cmdDecisionRecord(args: string[]) {
+  const title = flagValue(args, '--title');
+  const project = flagValue(args, '--project');
+  const decision = flagValue(args, '--decision');
+  const rationale = flagValue(args, '--rationale');
+  const altsStr = flagValue(args, '--alts');
+  const owner = flagValue(args, '--owner');
+  const tagsStr = flagValue(args, '--tags');
+  const sourceUrl = flagValue(args, '--source-url');
+
+  if (!title || !decision || !rationale) {
+    console.error('Nutzung: npm run agent -- decision-record --title "Titel" --decision "Beschluss" --rationale "Begründung" [--project "Name"] [--alts "Alt1,Alt2"] [--owner "Hardy"] [--tags "tag1,tag2"] [--source-url URL]');
+    process.exit(1);
+  }
+
+  const record = recordDecision({
+    title,
+    project,
+    decision,
+    rationale,
+    alternativesConsidered: altsStr ? altsStr.split(',').map((s) => s.trim()).filter(Boolean) : [],
+    owner,
+    tags: tagsStr ? tagsStr.split(',').map((s) => s.trim()).filter(Boolean) : [],
+    sourceUrl,
+  });
+
+  console.log(`\nEntscheidung erfolgreich gespeichert (${record.id}):\n• Titel: ${record.title}\n• Beschluss: ${record.decision}\n• Begründung: ${record.rationale}\n• Alternativen: ${record.alternativesConsidered.join(', ') || 'keine'}\n`);
+}
+
+async function cmdDecisionSearch(args: string[]) {
+  const query = args.filter((a) => !a.startsWith('--')).join(' ');
+  const project = flagValue(args, '--project');
+  const tag = flagValue(args, '--tag');
+  const owner = flagValue(args, '--owner');
+
+  const decisions = searchDecisions({ query: query || undefined, project, tag, owner });
+  if (decisions.length === 0) {
+    console.log('Keine Entscheidungen gefunden.');
+    return;
+  }
+
+  console.log(`\n${decisions.length} Entscheidung(en) gefunden:\n`);
+  for (const d of decisions) {
+    const projStr = d.project ? ` [${d.project}]` : '';
+    const ownerStr = d.owner ? ` | Owner: ${d.owner}` : '';
+    const altsStr = d.alternativesConsidered?.length ? `\n   Verworfene Alternativen: ${d.alternativesConsidered.join('; ')}` : '';
+    const srcStr = d.sourceUrl ? `\n   Quelle: ${d.sourceUrl}` : '';
+    console.log(`•${projStr} ${d.title} (${d.date}${ownerStr})\n   Beschluss: "${d.decision}"\n   Begründung: "${d.rationale}"${altsStr}${srcStr}\n`);
+  }
+}
+
 function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i >= 0 && i + 1 < args.length) return args[i + 1];
@@ -654,6 +773,11 @@ PCG Agent CLI – Befehle:
   npm run agent -- calendar --title "Titel" --when "YYYY-MM-DD HH:MM" [--duration-min 60]
   npm run agent -- browser-pages    Verbundenen Browser-MCP-Tab auslesen
   npm run agent -- browser-compare --urls "url1,url2" --instruction "Vergleiche die Projekte"
+  npm run agent -- evidence-search "Begriff" [--source drive|gmail|calendar|chat|tasks] [--project name] [--limit 5]
+  npm run agent -- fact-upsert --subject "Name" --predicate "rel" --object "Wert" [--from ISO] [--source-url URL]
+  npm run agent -- fact-timeline ["Subject"] [--predicate "rel"] [--all]
+  npm run agent -- decision-record --title "Titel" --decision "Beschluss" --rationale "Grund" [--project "P"] [--alts "A1,A2"] [--owner "O"] [--tags "t1,t2"]
+  npm run agent -- decision-search ["Begriff"] [--project "P"] [--tag "t"] [--owner "O"]
 
 Chat-Rückkanal (Google Chat Bot):
   npm run agent -- chat-spaces         Chat-Räume auflisten (Raum-ID für .env)
@@ -685,6 +809,11 @@ async function main() {
       case 'calendar': return await cmdCalendar(args.slice(1));
       case 'browser-pages': return await cmdBrowserPages();
       case 'browser-compare': return await cmdBrowserCompare(args.slice(1));
+      case 'evidence-search': return await cmdEvidenceSearch(args.slice(1));
+      case 'fact-upsert': return await cmdFactUpsert(args.slice(1));
+      case 'fact-timeline': return await cmdFactTimeline(args.slice(1));
+      case 'decision-record': return await cmdDecisionRecord(args.slice(1));
+      case 'decision-search': return await cmdDecisionSearch(args.slice(1));
       case 'chat-spaces': return await cmdChatSpaces();
       case 'chat-send': return await cmdChatSend(args.slice(1).join(' '));
       case 'chat-process': return await cmdChatProcess();

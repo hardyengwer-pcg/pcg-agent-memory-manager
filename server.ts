@@ -7,6 +7,9 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import cron from 'node-cron';
 import 'dotenv/config';
+import { appendVerbatimEvidence, searchVerbatimEvidence, type VerbatimEvidenceInput } from './verbatim-evidence-ledger.ts';
+import { queryTemporalTimeline, upsertTemporalFact, type TemporalFactInput } from './temporal-facts.ts';
+import { recordDecision, searchDecisions, type DecisionRecordInput } from './decision-memory.ts';
 
 const app = express();
 const PORT = 3000;
@@ -148,6 +151,15 @@ export function saveCronStatus(statusData: any) {
     fs.writeFileSync(CRON_STATUS_FILE, JSON.stringify(statusData, null, 2), 'utf-8');
   } catch (e) {
     console.error("Error saving cron status:", e);
+  }
+}
+
+function recordVerbatimEvidence(inputs: VerbatimEvidenceInput[]): void {
+  try {
+    const records = appendVerbatimEvidence(inputs);
+    if (records.length > 0) console.log(`[Evidence Ledger] ${records.length} neue unveränderte Quelle(n) gespeichert.`);
+  } catch (error: any) {
+    console.warn('[Evidence Ledger] Speicherung übersprungen:', error?.message || error);
   }
 }
 
@@ -770,6 +782,7 @@ export async function fetchRecentEmails(auth: any) {
           subject,
           date,
           bodySnippet,
+          bodyText: emailBodyText || snippet,
           attachments: attachmentsList.join(', '),
           isTranscriptOrProject
         });
@@ -777,6 +790,16 @@ export async function fetchRecentEmails(auth: any) {
         console.warn(`Gmail msg get notice ${msgId}:`, singleMsgErr?.message || singleMsgErr);
       }
     }
+
+    recordVerbatimEvidence(parsedEmails.map(email => ({
+      sourceType: 'gmail' as const,
+      sourceId: email.id,
+      content: email.bodyText,
+      sourceTimestamp: email.date || (email.internalDate ? new Date(email.internalDate).toISOString() : undefined),
+      author: email.from,
+      sourceUrl: `https://mail.google.com/mail/u/0/#all/${email.id}`,
+      metadata: { subject: email.subject, status: email.statusStr, attachments: email.attachments },
+    })));
 
     // Deterministic sort: latest email first
     parsedEmails.sort((a, b) => {
@@ -897,6 +920,15 @@ export async function fetchUpcomingEvents(auth: any) {
       const loc = event.location ? ` | Ort: ${event.location}` : '';
       const attendees = event.attendees ? ` | Teilnehmer: ${event.attendees.map((a: any) => a.displayName || a.email).join(', ')}` : '';
       const calUrl = event.htmlLink || 'https://calendar.google.com/calendar/u/0/r';
+      recordVerbatimEvidence([{
+        sourceType: 'calendar',
+        sourceId: event.id || `${summary}:${start}`,
+        content: JSON.stringify(event),
+        sourceTimestamp: start,
+        author: event.organizer?.email,
+        sourceUrl: calUrl,
+        metadata: { summary, status: tag },
+      }]);
       eventsContext += `- ${tag} ${summary} (${start} bis ${end}) | Direktlink: ${calUrl}${loc}${attendees}${desc}\n`;
     }
     return eventsContext;
@@ -930,6 +962,16 @@ export async function fetchRecentChats(auth: any) {
           const sender = msg.sender?.displayName || msg.sender?.name || 'User';
           const text = msg.text || '(Kein Text)';
           const timeStr = msg.createTime ? ` [${new Date(msg.createTime).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}]` : '';
+          recordVerbatimEvidence([{
+            sourceType: 'chat',
+            sourceId: msg.name || `${space.name}:${msg.createTime}:${sender}`,
+            content: JSON.stringify(msg),
+            sourceTimestamp: msg.createTime,
+            author: sender,
+            sourceUrl: chatUrl,
+            parentId: space.name,
+            metadata: { spaceName: space.name, spaceLabel },
+          }]);
           chatContext += `   * ${sender}${timeStr}: "${text.replace(/\n+/g, ' ')}"\n`;
         }
       } catch (msgErr: any) {
@@ -995,6 +1037,16 @@ export async function fetchTasks(auth: any) {
 
     openTasks.sort((a, b) => (a.task.due || '9999').localeCompare(b.task.due || '9999') || a.task.title.localeCompare(b.task.title));
     completedTasks.sort((a, b) => (b.task.completed || '').localeCompare(a.task.completed || ''));
+
+    recordVerbatimEvidence([...openTasks, ...completedTasks].map(({ task, listTitle }) => ({
+      sourceType: 'tasks' as const,
+      sourceId: task.id,
+      content: JSON.stringify(task),
+      sourceTimestamp: task.updated || task.completed || task.due,
+      sourceUrl: tasksUrl,
+      parentId: task.parent,
+      metadata: { listTitle, status: task.status },
+    })));
 
     let tasksContext = "Google Tasks – AUTORITATIVE AUFGABENZUSTÄNDE:\n";
     tasksContext += "OFFEN (müssen berücksichtigt werden, auch wenn andere Quellen das Thema als abgeschlossen bezeichnen):\n";
@@ -1658,6 +1710,15 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
         const isCustomerPrep = /schwarz|dsv|vorbereitung|use\s*case/i.test(file.path || file.name);
         const prepHighlight = isCustomerPrep ? ' [⭐ KUNDEN-VORBEREITUNGS-DOKUMENT]' : '';
         const docUrl = file.webViewLink || (file.mimeType.includes('google-apps.document') ? `https://docs.google.com/document/d/${file.id}/edit` : file.mimeType.includes('google-apps.spreadsheet') ? `https://docs.google.com/spreadsheets/d/${file.id}/edit` : `https://drive.google.com/file/d/${file.id}/view`);
+
+        recordVerbatimEvidence([{
+          sourceType: 'drive',
+          sourceId: file.id,
+          content,
+          sourceTimestamp: file.modifiedTime,
+          sourceUrl: docUrl,
+          metadata: { name: file.name, path: file.path, mimeType: file.mimeType },
+        }]);
 
         contextData += `--- DOKUMENT / TRANSKRIPT / VORBEREITUNG: "${file.path || file.name}" | Direktlink: ${docUrl}${prepHighlight}${ageNotice} ---\n${truncated}\n\n`;
       }
@@ -2503,6 +2564,105 @@ app.post('/api/actions/drive', async (req, res) => {
     }
     console.error("Drive action error:", error);
     res.status(500).json({ error: error?.message || "Fehler beim Speichern der Datei in Google Drive." });
+  }
+});
+
+app.post('/api/evidence/search', async (req, res) => {
+  try {
+    const { query, sourceType, limit, minScore, projectFilter } = req.body || {};
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({ error: 'Suchanfrage (query) ist erforderlich.' });
+    }
+    const results = searchVerbatimEvidence({
+      query,
+      sourceType,
+      limit: typeof limit === 'number' ? limit : 10,
+      minScore: typeof minScore === 'number' ? minScore : 0.5,
+      projectFilter: typeof projectFilter === 'string' ? projectFilter : undefined,
+    });
+    res.json({ success: true, count: results.length, results });
+  } catch (error: any) {
+    console.error('Evidence search error:', error);
+    res.status(500).json({ error: error?.message || 'Fehler bei der Quellensuche.' });
+  }
+});
+
+app.post('/api/facts/upsert', async (req, res) => {
+  try {
+    const { subject, predicate, object, validFrom, validTo, sourceUrl, sourceType, confidence, metadata } = req.body || {};
+    if (!subject || !predicate || !object) {
+      return res.status(400).json({ error: 'subject, predicate und object sind erforderlich.' });
+    }
+    const result = upsertTemporalFact({
+      subject,
+      predicate,
+      object,
+      validFrom,
+      validTo,
+      sourceUrl,
+      sourceType,
+      confidence,
+      metadata,
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error('Temporal fact upsert error:', error);
+    res.status(500).json({ error: error?.message || 'Fehler beim Speichern des Fakts.' });
+  }
+});
+
+app.get('/api/facts/timeline', async (req, res) => {
+  try {
+    const subject = req.query.subject ? String(req.query.subject) : undefined;
+    const predicate = req.query.predicate ? String(req.query.predicate) : undefined;
+    const includeInvalidated = req.query.includeInvalidated === 'true';
+
+    const facts = queryTemporalTimeline({ subject, predicate, includeInvalidated });
+    res.json({ success: true, count: facts.length, facts });
+  } catch (error: any) {
+    console.error('Temporal timeline query error:', error);
+    res.status(500).json({ error: error?.message || 'Fehler beim Laden der Timeline.' });
+  }
+});
+
+app.post('/api/decisions/record', async (req, res) => {
+  try {
+    const { title, project, decision, rationale, alternativesConsidered, owner, date, sourceUrl, tags, metadata } = req.body || {};
+    if (!title || !decision || !rationale) {
+      return res.status(400).json({ error: 'title, decision und rationale sind erforderlich.' });
+    }
+    const record = recordDecision({
+      title,
+      project,
+      decision,
+      rationale,
+      alternativesConsidered: Array.isArray(alternativesConsidered) ? alternativesConsidered : [],
+      owner,
+      date,
+      sourceUrl,
+      tags: Array.isArray(tags) ? tags : [],
+      metadata,
+    });
+    res.json({ success: true, record });
+  } catch (error: any) {
+    console.error('Decision record error:', error);
+    res.status(500).json({ error: error?.message || 'Fehler beim Speichern der Entscheidung.' });
+  }
+});
+
+app.get('/api/decisions/search', async (req, res) => {
+  try {
+    const query = req.query.query ? String(req.query.query) : undefined;
+    const project = req.query.project ? String(req.query.project) : undefined;
+    const owner = req.query.owner ? String(req.query.owner) : undefined;
+    const tag = req.query.tag ? String(req.query.tag) : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : 50;
+
+    const decisions = searchDecisions({ query, project, owner, tag, limit });
+    res.json({ success: true, count: decisions.length, decisions });
+  } catch (error: any) {
+    console.error('Decision search error:', error);
+    res.status(500).json({ error: error?.message || 'Fehler bei der Entscheidungssuche.' });
   }
 });
 

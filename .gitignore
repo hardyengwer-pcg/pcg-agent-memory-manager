@@ -15,5 +15,6 @@ coverage/
 .ai_settings.json
 .last_cron_status.json
 agent-memory/
+.evidence-ledger/
 .antigravity/
 .agents/
