@@ -1203,6 +1203,28 @@ type StructuredMemoryConcept = {
   sources?: { id?: string; resource: string; title?: string }[];
 };
 
+export type StructuredMemoryChange = {
+  kind: 'added' | 'updated';
+  category: 'projects' | 'squad';
+  slug: string;
+  title: string;
+  status?: string;
+  previousStatus?: string;
+  sources?: { resource: string; title?: string }[];
+};
+
+type StructuredMemorySnapshot = Record<string, {
+  category: 'projects' | 'squad';
+  slug: string;
+  title: string;
+  description: string;
+  status?: string;
+  body: string;
+}>;
+
+const PROJECT_CHANGE_LOG = path.join(process.cwd(), 'agent-memory', 'project-change-log.md');
+const PROJECT_CHANGE_SNAPSHOT = path.join(process.cwd(), 'agent-memory', '.project-change-snapshot.json');
+
 function slugifyMemoryTitle(value: string): string {
   return value
     .toLowerCase()
@@ -1269,6 +1291,96 @@ function renderStructuredMemoryConcept(concept: StructuredMemoryConcept, generat
   return lines.join('\n');
 }
 
+function changeKey(concept: Pick<StructuredMemoryConcept, 'category' | 'slug'>): string {
+  return `${concept.category}/${concept.slug}`;
+}
+
+function normalizedChangeValue(value: string | undefined): string {
+  return (value || '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function loadStructuredMemorySnapshot(): StructuredMemorySnapshot {
+  try {
+    if (!fs.existsSync(PROJECT_CHANGE_SNAPSHOT)) return {};
+    return JSON.parse(fs.readFileSync(PROJECT_CHANGE_SNAPSHOT, 'utf-8')) as StructuredMemorySnapshot;
+  } catch {
+    return {};
+  }
+}
+
+export function detectStructuredMemoryChanges(
+  previous: StructuredMemorySnapshot,
+  concepts: StructuredMemoryConcept[],
+): StructuredMemoryChange[] {
+  const changes: StructuredMemoryChange[] = [];
+  for (const concept of concepts) {
+    if (concept.category !== 'projects' && concept.category !== 'squad') continue;
+    const key = changeKey(concept);
+    const old = previous[key];
+    const current = {
+      category: concept.category,
+      slug: concept.slug,
+      title: concept.title,
+      description: concept.description,
+      status: concept.status,
+      body: concept.body,
+    };
+    const materialChange = old && (
+      normalizedChangeValue(old.title) !== normalizedChangeValue(current.title) ||
+      normalizedChangeValue(old.description) !== normalizedChangeValue(current.description) ||
+      normalizedChangeValue(old.status) !== normalizedChangeValue(current.status) ||
+      normalizedChangeValue(old.body) !== normalizedChangeValue(current.body)
+    );
+    if (!old || materialChange) {
+      changes.push({
+        kind: old ? 'updated' : 'added',
+        category: concept.category,
+        slug: concept.slug,
+        title: concept.title,
+        status: concept.status,
+        previousStatus: old?.status,
+        sources: (concept.sources || []).filter(source => source && typeof source.resource === 'string').map(source => ({ resource: source.resource, title: source.title })),
+      });
+    }
+  }
+  return changes;
+}
+
+function appendProjectChangeLog(changes: StructuredMemoryChange[], generatedAt: string): void {
+  if (changes.length === 0) return;
+  const date = generatedAt.slice(0, 10);
+  const lines = changes.map(change => {
+    const status = change.previousStatus && change.status && change.previousStatus !== change.status
+      ? `Status: ${change.previousStatus} -> ${change.status}`
+      : `Status: ${change.status || 'nicht angegeben'}`;
+    const sources = (change.sources || []).slice(0, 4).map(source => `[${source.title || 'Quelle'}](${source.resource})`).join(', ');
+    return [
+      `- **${change.kind === 'added' ? 'Neu' : 'Geändert'}**: \`${change.category}/${change.slug}\` – ${change.title}`,
+      `  - ${status}`,
+      sources ? `  - Quellen: ${sources}` : '  - Quellen: nicht angegeben',
+    ].join('\n');
+  }).join('\n');
+  const existing = fs.existsSync(PROJECT_CHANGE_LOG) ? fs.readFileSync(PROJECT_CHANGE_LOG, 'utf-8') : '# Projekt- und Squad-Änderungslog\n\n';
+  fs.writeFileSync(PROJECT_CHANGE_LOG, `${existing.trimEnd()}\n\n## ${date}\n\n${lines}\n`, 'utf-8');
+}
+
+function saveStructuredMemorySnapshot(concepts: StructuredMemoryConcept[]): void {
+  const snapshot: StructuredMemorySnapshot = {};
+  for (const concept of concepts) {
+    if (concept.category !== 'projects' && concept.category !== 'squad') continue;
+    snapshot[changeKey(concept)] = {
+      category: concept.category,
+      slug: concept.slug,
+      title: concept.title,
+      description: concept.description,
+      status: concept.status,
+      body: concept.body,
+    };
+  }
+  fs.mkdirSync(path.dirname(PROJECT_CHANGE_SNAPSHOT), { recursive: true });
+  fs.writeFileSync(PROJECT_CHANGE_SNAPSHOT, JSON.stringify(snapshot, null, 2), 'utf-8');
+}
+
 function updateStructuredMemoryIndex(concepts: StructuredMemoryConcept[]): void {
   const memDir = path.join(process.cwd(), 'agent-memory');
   const byCategory = new Map<StructuredMemoryConcept['category'], StructuredMemoryConcept[]>();
@@ -1313,6 +1425,7 @@ function updateStructuredMemoryIndex(concepts: StructuredMemoryConcept[]): void 
     '',
     '- [Aktive Aufgaben und Memory-Regeln](tasks.md) - Autoritative Aufgaben- und Briefing-Regeln.',
     '- [Änderungslog](log.md) - Chronologische Änderungen an diesem Bundle.',
+    '- [Projekt- und Squad-Änderungslog](project-change-log.md) - Erkanntes Hinzukommen und materielle Änderungen.',
   ];
   for (const category of Object.keys(categoryLabels) as StructuredMemoryConcept['category'][]) {
     lines.push('', `## ${categoryLabels[category]}`, '');
@@ -1392,6 +1505,10 @@ ${input.localMemoryContext}`,
     slug: slugifyMemoryTitle(concept.slug || concept.title),
   }));
   if (concepts.length === 0) return [];
+
+  const changes = detectStructuredMemoryChanges(loadStructuredMemorySnapshot(), concepts);
+  appendProjectChangeLog(changes, generatedAt);
+  saveStructuredMemorySnapshot(concepts);
 
   const memDir = path.join(process.cwd(), 'agent-memory');
   for (const category of ['projects', 'customers', 'squad', 'general']) {

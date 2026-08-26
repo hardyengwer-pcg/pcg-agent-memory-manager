@@ -58,6 +58,17 @@ schtasks /create /tn "PCG Agent Chat" /tr "wscript.exe `"$project\run-agent-hidd
 
 Vor dem Aktivieren geplanter Tasks einen manuellen `daily`- und `chat-process`-Lauf pruefen.
 
+## Browser-Vergleich
+
+Der Browser-Vergleich liest ausschliesslich die sichtbaren Inhalte von URLs ueber `@browsermcp/mcp` und die Browser-MCP-Extension. Jira- und Odoo-Logins werden nicht ausgelesen; die bestehende Browser-Sitzung wird verwendet. Vor dem Lauf muss der gewuenschte Tab in der Extension mit `Connect` verbunden werden.
+
+```bash
+npm run agent -- browser-pages
+npm run agent -- browser-compare --urls "https://jira.example/project,https://odoo.example/project" --instruction "Vergleiche die Projekte hinsichtlich Status, Verantwortlichen und naechsten Schritten."
+```
+
+Es gibt keine Schreibaktionen. Fuer zusaetzliche Sicherheit kann `BROWSER_ALLOWED_HOSTS` in `.env` auf eine kommaseparierte Liste erlaubter Hostnamen gesetzt werden.
+
 ## Wartung
 
 ```bash

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractDavidOneOnOneAgenda, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals } from '../server.ts';
+import { detectStructuredMemoryChanges, extractDavidOneOnOneAgenda, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals } from '../server.ts';
 
 const tasksContext = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
 OFFEN:
@@ -29,6 +29,38 @@ test('separates concrete customer engagements into projects', () => {
 
   assert.equal(concept.category, 'projects');
   assert.equal(concept.type, 'Project');
+});
+
+test('detects new and materially changed project and squad concepts', () => {
+  const previous = {
+    'projects/demo': {
+      category: 'projects' as const,
+      slug: 'demo',
+      title: 'Demo',
+      description: 'Altes Projekt',
+      status: 'stable',
+      body: 'Alter Stand',
+    },
+  };
+  const changes = detectStructuredMemoryChanges(previous, [
+    {
+      category: 'projects', slug: 'demo', type: 'Project', title: 'Demo',
+      description: 'Neuer Projektstatus', status: 'stable', body: 'Neuer Stand',
+    },
+    {
+      category: 'squad', slug: 'staffing', type: 'Squad Topic', title: 'Staffing',
+      description: 'Neue Planung', status: 'draft', body: 'David übernimmt.',
+    },
+    {
+      category: 'general', slug: 'rule', type: 'Reference', title: 'Regel',
+      description: 'Keine Änderung', status: 'stable', body: 'Regel',
+    },
+  ]);
+
+  assert.deepEqual(changes.map(change => `${change.kind}:${change.category}/${change.slug}`), [
+    'updated:projects/demo',
+    'added:squad/staffing',
+  ]);
 });
 
 test('loads only allowlisted workflow skills', () => {

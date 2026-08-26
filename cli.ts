@@ -26,6 +26,7 @@ import {
   generateAIContent,
   formatAIError,
 } from './server.ts';
+import { captureCurrentBrowserPage, compareBrowserPages } from './browser-mcp.ts';
 
 const ROOT = process.cwd();
 const ENV_FILE = path.join(ROOT, '.env');
@@ -233,7 +234,7 @@ async function processChatCommand(text: string, token: string, oauth2Client: any
   const systemInstruction = `Du bist der PCG Agent Memory Manager, der persönliche KI-Assistent von Hardy Engwer (Squad Lead DATA / AI Consultant bei PCG). Interpretiere die folgende Chat-Nachricht von Hardy und übersetze sie in GENAU EIN JSON-Aktionsobjekt. Antworte ausschließlich mit:
 
 <ACTION>
-{ "action": "task" | "calendar" | "email" | "todos" | "status" | "daily", "title": "", "notes": "", "dueDate": "", "startTime": "", "to": "", "subject": "", "body": "" }
+ { "action": "task" | "calendar" | "email" | "todos" | "status" | "daily" | "browser-compare", "title": "", "notes": "", "dueDate": "", "startTime": "", "to": "", "subject": "", "body": "", "urls": "" }
 </ACTION>
 
 Regeln:
@@ -243,6 +244,7 @@ Regeln:
 - todos: Liste der offenen Google Tasks ausgeben (keine weiteren Felder nötig).
 - status: Status des letzten Daily-Updates ausgeben.
 - daily: Das komplette tägliche Update (Briefing + Tasks + E-Mail) jetzt auslösen.
+- browser-compare: Die angegebenen HTTP(S)-URLs nacheinander im über die Browser MCP Extension verbundenen Tab öffnen und vergleichen. urls muss mindestens zwei URLs enthalten; title oder notes enthält die Vergleichsanweisung.
 - Wenn die Absicht unklar ist, wähle action="todos".
 Antworte NUR mit dem <ACTION>-Block, kein anderer Text.`;
 
@@ -311,6 +313,12 @@ Antworte NUR mit dem <ACTION>-Block, kein anderer Text.`;
         const result = await performDailyUpdate(token, true, { autoCreateTasks: true });
         const tasks = (result.createdTasks || []).map((t) => `${t.error ? 'FEHLER' : 'OK'}: ${t.title}`).join('\n') || 'keine';
         return `Daily-Update abgeschlossen (${result.dateStr}).\nErstellte Tasks:\n${tasks}\nE-Mail: ${result.emailSent ? 'gesendet' : 'fehlgeschlagen'}.`;
+      }
+      case 'browser-compare': {
+        const instruction = action.title || action.notes || 'Vergleiche die sichtbaren Seiten und nenne die wichtigsten Unterschiede.';
+        if (!action.urls) return 'Browser-Vergleich benötigt urls mit mindestens zwei HTTP(S)-URLs.';
+        const result = await compareBrowserPages(instruction, action.urls);
+        return `Browser-Vergleich (${result.pages.map((page) => page.url).join(', ')}):\n\n${result.result}`;
       }
       case 'todos':
       default: {
@@ -608,6 +616,25 @@ async function cmdCalendar(args: string[]) {
   console.log(`Termin angelegt: ${title} (ID: ${created.data.id})`);
 }
 
+async function cmdBrowserPages() {
+  const snapshot = await captureCurrentBrowserPage();
+  console.log('\nAktueller über Browser MCP verbundener Tab:\n');
+  console.log(snapshot || '(Kein Seiteninhalt gelesen.)');
+  console.log('');
+}
+
+async function cmdBrowserCompare(args: string[]) {
+  const urls = flagValue(args, '--urls');
+  const instruction = flagValue(args, '--instruction');
+  if (!urls || !instruction) {
+    console.error('Nutzung: npm run agent -- browser-compare --urls "https://jira.example/project,https://odoo.example/project" --instruction "Vergleiche die Projekte"');
+    process.exit(1);
+  }
+  const result = await compareBrowserPages(instruction, urls);
+  console.log(`\nVerglichene URLs: ${result.pages.map((page) => page.url).join(', ')}\n`);
+  console.log(result.result);
+}
+
 function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i >= 0 && i + 1 < args.length) return args[i + 1];
@@ -625,6 +652,8 @@ PCG Agent CLI – Befehle:
   npm run agent -- task "Titel" [--due YYYY-MM-DD] [--notes "Notiz"]
   npm run agent -- email --to x@y.de --subject "Betreff" --body "Text"
   npm run agent -- calendar --title "Titel" --when "YYYY-MM-DD HH:MM" [--duration-min 60]
+  npm run agent -- browser-pages    Verbundenen Browser-MCP-Tab auslesen
+  npm run agent -- browser-compare --urls "url1,url2" --instruction "Vergleiche die Projekte"
 
 Chat-Rückkanal (Google Chat Bot):
   npm run agent -- chat-spaces         Chat-Räume auflisten (Raum-ID für .env)
@@ -654,6 +683,8 @@ async function main() {
       case 'task': return await cmdTask(args.slice(1));
       case 'email': return await cmdEmail(args.slice(1));
       case 'calendar': return await cmdCalendar(args.slice(1));
+      case 'browser-pages': return await cmdBrowserPages();
+      case 'browser-compare': return await cmdBrowserCompare(args.slice(1));
       case 'chat-spaces': return await cmdChatSpaces();
       case 'chat-send': return await cmdChatSend(args.slice(1).join(' '));
       case 'chat-process': return await cmdChatProcess();

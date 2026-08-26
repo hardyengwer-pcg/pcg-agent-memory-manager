@@ -21,11 +21,14 @@ Run during the Daily process or when a material project, customer, squad or gove
 3. Add OKF frontmatter with `type`, `title`, `description`, `tags`, `status`, `generated`, `verified` and `sources`.
 4. Preserve stable concept slugs and update existing concepts instead of creating duplicates.
 5. Rebuild `index.md` and append a concise entry to `log.md`.
-6. Synchronize the resulting bundle to Google Drive.
+6. Compare `projects/` and `squad/` concepts with the previous snapshot.
+7. Append new or materially changed concepts to `project-change-log.md` with status and sources.
+8. Synchronize the resulting bundle to Google Drive.
 
 ## Guardrails
 
 - Never use an old source to reopen a completed Google Task.
+- Treat the project/squad change log as an evidence trail, not as an authoritative task source.
 - Never invent an owner, deadline, budget or project status.
 - Do not store OAuth tokens, API keys or credentials in the bundle.
 - Do not overwrite user-authored files outside agent-managed concept directories.
