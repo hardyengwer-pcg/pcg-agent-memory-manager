@@ -1119,6 +1119,7 @@ const AVAILABLE_SKILLS: Record<string, string> = {
   'david-one-on-one-preparation': 'david-one-on-one-preparation.md',
   'daily-management-briefing': 'daily-management-briefing.md',
   'project-and-customer-status': 'project-and-customer-status.md',
+  'squad-lead-operations': 'squad-lead-operations.md',
   'chat-command-safety': 'chat-command-safety.md',
 };
 
@@ -1463,6 +1464,7 @@ export async function generateStructuredMemoryConcepts(input: {
     'workspace-context-ingestion',
     'task-state-reconciliation',
     'project-and-customer-status',
+    'squad-lead-operations',
   ]);
   const response = await generateAIContent({
     contents: `Erzeuge aus dem folgenden Workspace-Kontext ein kuratiertes OKF-v0.2-Memory. Gib ausschließlich valides JSON als Array zurück.
@@ -1557,7 +1559,7 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
     // 3. Targeted search 1: Specific customer, preparation, and project documents
     let targetedFiles: any[] = [];
     try {
-      const targetQuery = "trashed = false and (name contains 'Schwarz' or name contains 'DSV' or name contains 'Vorbereitung' or name contains 'Use Case' or name contains 'Memory' or name contains 'Briefing' or name contains 'Meeting' or name contains 'Protokoll' or name contains 'Transkript' or name contains 'Notes' or name contains 'Sync' or name contains 'Besprechung' or name contains 'Koenig' or name contains 'Bauer' or name contains 'PK' or name contains 'Lorenz' or name contains 'domcura' or name contains 'voestalpine' or name contains 'VOEST' or name contains 'Alpine')";
+       const targetQuery = "trashed = false and (name contains 'Schwarz' or name contains 'DSV' or name contains 'Vorbereitung' or name contains 'Use Case' or name contains 'Memory' or name contains 'Briefing' or name contains 'Meeting' or name contains 'Protokoll' or name contains 'Transkript' or name contains 'Transcript' or name contains 'Notes' or name contains 'Sync' or name contains 'Weekly' or name contains 'Wochen' or name contains 'Besprechung' or name contains 'Koenig' or name contains 'Bauer' or name contains 'PK' or name contains 'Lorenz' or name contains 'domcura' or name contains 'voestalpine' or name contains 'VOEST' or name contains 'Alpine' or name contains 'Fabian' or name contains 'Mario' or name contains 'Panda' or name contains 'Auslastung' or name contains 'Kapazität' or name contains 'Staffing' or name contains 'Billability' or name contains 'Allocation' or name contains 'Resource')";
       const res = await drive.files.list({
         q: targetQuery,
         pageSize: 60,
@@ -1661,11 +1663,122 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
       }
     }
     const localMem = loadLocalMemoryContext();
-    return (localMem + contextData) || "(Keine Dokumente, Meeting-Protokolle oder Transkripte im Google Drive gefunden.)\n";
+     return (contextData + '\n--- LOKALES MEMORY / HINTERGRUND (gegen aktuelle datierte Quellen prüfen) ---\n' + localMem) || "(Keine Dokumente, Meeting-Protokolle oder Transkripte im Google Drive gefunden.)\n";
   } catch (e: any) {
     console.warn("Drive knowledge base fetch notice:", e?.message || e);
     return "(Dokumente / Meeting-Protokolle aus Google Drive konnten nicht geladen werden)\n";
   }
+}
+
+function extractCurrentSquadSignals(driveContext: string, chatsContext: string): string {
+  const currentDrive = driveContext.split('\n--- LOKALES MEMORY / HINTERGRUND')[0];
+  const driveBlocks = currentDrive.match(/--- DOKUMENT \/ TRANSKRIPT[\s\S]*?(?=\n--- DOKUMENT \/ TRANSKRIPT|$)/g) || [];
+  const currentSourceBlocks = driveBlocks.filter(block => !/(?:^|\s)(?:projects|customers|squad|general)\/[^\s"|]+\.md/i.test(block));
+  const relevantBlocks = currentSourceBlocks.filter(block => /panda|mario|auslastung|kapazität|neue[nr]?\s+projekte|staffing|resource planner|billability|allocation/i.test(block));
+  const chatLines = chatsContext.split(/\r?\n/).filter(line => /panda|mario|auslastung|kapazität|neue[nr]?\s+projekte|staffing|resource planner|billability|allocation/i.test(line));
+  const signals = [
+    ...relevantBlocks.slice(0, 8).map(block => block.slice(0, 5000)),
+    chatLines.slice(0, 80).join('\n'),
+  ].filter(Boolean).join('\n\n');
+  return signals || '(Keine aktuelle datierte Squad-Auslastungsquelle für Panda oder Mario gefunden.)';
+}
+
+export function extractProjectCapacityEvidence(driveContext: string, emailsContext: string, chatsContext: string): string {
+  const evidencePattern = /projekt|project|sow|statement of work|aufwand|budget|pipeline|kapaz|auslast|staffing|allocation|billability|resource planner|booking|bench|unassigned|presales|sbe|service before/i;
+  const currentDrive = driveContext.split('\n--- LOKALES MEMORY / HINTERGRUND')[0];
+  const driveBlocks = currentDrive.match(/--- DOKUMENT \/ TRANSKRIPT[\s\S]*?(?=\n--- DOKUMENT \/ TRANSKRIPT|$)/g) || [];
+  const sourceBlocks = driveBlocks
+    .filter(block => !/(?:^|\s)(?:projects|customers|squad|general)\/[^\s"|]+\.md/i.test(block))
+    .filter(block => evidencePattern.test(block))
+    .slice(0, 40)
+    .map(block => block.slice(0, 7000));
+  const messageLines = `${emailsContext}\n${chatsContext}`
+    .split(/\r?\n/)
+    .filter(line => evidencePattern.test(line))
+    .slice(0, 300);
+  return [...sourceBlocks, messageLines.join('\n')].filter(Boolean).join('\n\n') || '(Keine projekt- oder kapazitätsbezogenen Quellen gefunden.)';
+}
+
+export function sanitizeCurrentSquadCapacityClaims(text: string, currentSquadSignals: string): string {
+  const sourceUrl = currentSquadSignals.match(/Direktlink:\s*(https?:\S+)/i)?.[1];
+  const capacityClaim = /(?:\*\*)?\b([A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+(?:\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+){0,2})(?:\*\*)?\s+(?:ist|sind)\s+(voll ausgelastet(?:\s*\/\s*regulär im Einsatz)?|unausgelastet|im Bench|auf Bench|ohne Auslastung|hat keine Kapazität|hat freie Kapazität)/gi;
+  return text.replace(capacityClaim, (full, person: string) => {
+    const currentPersonSignal = new RegExp(`${person.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]{0,3000}(auslast|kapaz|pipeline|projekt|resource planner|billability|allocation)`, 'i').test(currentSquadSignals);
+    const currentAvailabilitySignal = new RegExp(`${person.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]{0,3000}(keine klare pipeline|kein festes budget|hat kapazität|freie kapazität|neue[nr]?\\s+projekte|weitere ideen)`, 'i').test(currentSquadSignals);
+    if (currentAvailabilitySignal) {
+      const noPipeline = new RegExp(`${person.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]{0,3000}(keine klare pipeline|kein festes budget)`, 'i').test(currentSquadSignals);
+      const signal = noPipeline
+        ? 'meldet aktuell keine klare Pipeline beziehungsweise kein festes Budget und fragt nach weiteren Projekten'
+        : 'meldet laut aktueller datierter Quelle Kapazitätsbedarf beziehungsweise Interesse an neuen Projekten';
+      return `${person} ${signal}${sourceUrl ? ` [Quelle: aktuelle Squad-Quelle](${sourceUrl})` : ''}`;
+    }
+    if (currentPersonSignal) return full;
+    return `${person}s aktueller Auslastungsstatus ist in den jüngsten datierten Weekly-/Transcript-Quellen nicht belegt; der alte Status wird nicht fortgeschrieben${sourceUrl ? ` [Quelle: aktuelle Squad-Quelle](${sourceUrl})` : ''}`;
+  });
+}
+
+function titleFromMemoryPath(value: string): string {
+  return value
+    .replace(/\.md$/i, '')
+    .split(/[-_/]+/)
+    .map(part => part ? `${part[0].toUpperCase()}${part.slice(1)}` : part)
+    .join(' ')
+    .replace(/\bVoestalpine\b/i, 'VOEST Alpine')
+    .replace(/\bKoenig Und Bauer\b/i, 'Koenig & Bauer');
+}
+
+export function validateDailyBriefingStructure(text: string): string {
+  const expectedSections = [
+    '## 1. [ÄNDERUNG] Projekt- und Kapazitätsänderungen',
+    '## 2. Squad Lead Control',
+    '## 3. 🚨 Proaktive Kunden- & Meeting-Vorbereitung',
+    '## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte',
+    '## 5. 🔮 Vorausschau & Wochenausblick',
+    '## 6. 💡 Konkrete nächste Schritte & Handlungsempfehlungen',
+  ];
+  const missing = expectedSections.filter(section => !text.includes(section));
+  if (missing.length > 0) {
+    console.warn(`[Briefing Structure] Fehlende Abschnitte: ${missing.join(', ')}`);
+  }
+
+  const firstSectionIndex = text.indexOf('## 1. [ÄNDERUNG]');
+  const titleEnd = text.indexOf('\n', text.indexOf('# ☀️'));
+  let normalized = firstSectionIndex > 0 && titleEnd >= 0
+    ? `${text.slice(0, titleEnd + 1)}\n${text.slice(firstSectionIndex)}`
+    : text;
+
+  const statusSectionStart = normalized.indexOf('## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte');
+  const statusSectionEnd = normalized.indexOf('\n## 5. ', statusSectionStart);
+  if (statusSectionStart >= 0) {
+    const end = statusSectionEnd >= 0 ? statusSectionEnd : normalized.length;
+    const section = normalized.slice(statusSectionStart, end);
+    const lines = section.split('\n');
+    const repaired: string[] = [];
+    let currentItem = false;
+    let itemHasStatus = false;
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (/^-\s+\*\*/.test(line)) {
+        currentItem = true;
+        itemHasStatus = false;
+      }
+      if (!line.trim() && itemHasStatus) currentItem = false;
+      if (/^\s*[•-]\s+\*\*Status:\*\*/.test(line) && !currentItem) {
+        const remaining = lines.slice(index).join('\n');
+        const sourcePath = remaining.match(/(?:projects|customers)\/([a-z0-9-]+)\.md/i)?.[1];
+        if (sourcePath) {
+          repaired.push(`- **${titleFromMemoryPath(sourcePath)}**`);
+          currentItem = true;
+        } else {
+          console.warn('[Briefing Structure] Verwaister Projektstatus ohne ermittelbaren Projekttitel.');
+        }
+      }
+      if (/^\s*[•-]\s+\*\*Status:\*\*/.test(line)) itemHasStatus = true;
+      repaired.push(line);
+    }
+    normalized = `${normalized.slice(0, statusSectionStart)}${repaired.join('\n')}${normalized.slice(end)}`;
+  }
+  return normalized;
 }
 
 // --- GOOGLE WORKSPACE ACTIONS ENDPOINTS & SANITIZATION ---
@@ -1817,13 +1930,6 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
         const matchesCompletedTask = taskStates.completed.some(completed => areTaskTextsSimilar(proposalTitle, completed));
         if (matchesCompletedTask) {
           console.log(`[Completed Task Filter] Removed proposal matching completed Google Task: "${p.title}"`);
-          modified = true;
-          continue;
-        }
-
-        // Filter out false Panda underutilization proposals
-        if ((titleLower.includes('panda') || notesLower.includes('panda')) && /auslastung|kapazität|unausgelastet|leerlauf/i.test(titleLower + ' ' + notesLower)) {
-          console.log(`[Panda Filter] Removed invalid Panda underutilization proposal: "${p.title}"`);
           modified = true;
           continue;
         }
@@ -2013,7 +2119,7 @@ MANDATORISCHE VORHERIGE AKTUALITÄTS- & RELEVANZ-PRÜFUNG:
 1. VOR JEDER AUSGABE EINES THEMAS ODER TO-DOS: Prüfe immer vorher, ob das Thema tatsächlich noch aktuell und aktiv ist!
 2. Wenn eine Information oder ein E-Mail-Thread älter als 1-2 Wochen ist und seither kein neuer Termin, kein neuer Austausch und keine offene Google Task dazu existiert, gilt das Thema als historisch/abgeschlossen und darf NICHT als neue Priorität oder aktives To-Do angezeigt werden.
 3. Inhalte aus dem Papierkorb (Trash) oder alte, unveränderte Drive-Dokumente dürfen keinesfalls als unerledigte To-Dos vorgeschlagen werden.
-4. KONFLIKTPRIORITÄT: Neueste explizite Nutzerkorrektur im lokalen Memory > Google-Tasks-Status > neueste datierte Mail/Chat/Meeting-Notiz > ältere Quellen.
+4. KONFLIKTPRIORITÄT: Neueste explizite Nutzerkorrektur > neueste datierte Weekly/Transkript/Chat-/Kalender-Quelle für Projekt- und Squad-Fakten > Google-Tasks-Status für Aufgaben > älteres lokales Memory. [ERLEDIGT] darf nie aus alten Quellen reaktiviert werden; [OFFEN] bleibt aktiv.
 5. Ein [ERLEDIGT]-Status in Google Tasks ist für genau diese Aufgabe final und darf durch ältere Quellen nicht reaktiviert werden.
 6. Ein [OFFEN]-Status in Google Tasks bleibt aktiv, auch wenn das übergeordnete Projekt oder eine ältere Notiz als abgeschlossen bezeichnet wird.
 
@@ -2031,8 +2137,9 @@ STRIKTE REGEL FÜR ABGESCHLOSSENE AUFGABEN & ADMINISTRATIVE MITTEILUNGEN:
    - Ein Projekt darf trotzdem einen neuen Status haben; schliesse nicht pauschal alle zukünftigen Aufgaben eines Projekts aus.
 2. HiBob / Stundenzettel-Freigaben (z. B. Stundenzettel von Nils Traut):
    - Sind administrative E-Mail-Mitteilungen bzw. längst erledigt. NIEMALS als offene To-Dos oder Freigabeaufgaben vorschlagen!
-3. Panda Auslastung:
-   - Panda ist voll ausgelastet / regulär im Einsatz. Schlage KEINE To-Dos oder Warnungen bzgl. "Panda unausgelastet" oder "Kapazitätsengpässe" vor.
+3. Panda und Mario Auslastung:
+   - Verwende niemals eine statische Auslastungsannahme. Prüfe die neueste datierte Weekly-, Transkript-, Chat- oder Planner-Quelle.
+   - Wenn Panda nach neuen Projekten fragt oder Mario für neue Aufgaben / andere Auslastung vorgeschlagen wird, nimm dies als aktuelles Squad-Planungssignal auf und verlinke die Quelle.
 4. Lorenz / Funding:
    - Lorenz Funding wird NICHT genutzt (keine Screenshots, Anträge etc. erstellen, nicht Hardys Aufgabe) – stattdessen werden lediglich intern ein paar Stunden umgebucht.
 5. Koenig & Bauer (Koenig&Bauer):
@@ -2501,40 +2608,52 @@ WICHTIGE FOKUS- & BRIEFING-REGELN:
    - **VOEST Alpine**: Immer "VOEST Alpine" (oder "voestalpine"), niemals "First Alpina" oder "First Alpine".
    - **Koenig & Bauer (Koenig&Bauer)**: Interne Treffen finden statt, um die Budgetfrage zu klären (beschlossen im PK vom Montag). Im Statusbericht transparent anführen!
    - **Lorenz Funding**: Lorenz Funding soll NICHT genutzt werden (keine Screenshots, Anträge etc., nicht Hardys Aufgabe) – stattdessen werden intern ein paar Stunden umgebucht.
-   - **Panda**: Panda ist voll ausgelastet / regulär im operativen Einsatz. Keine Behauptungen über Unterauslastung oder Kapazitätsengpässe!
+    - **Panda / Mario Auslastung**: Keine statischen Aussagen. Aktuellen Status ausschließlich aus der neuesten datierten Quelle ableiten; ältere Aussagen ausdrücklich als überholt behandeln.
    - **HiBob / Nils Traut**: Administrative Stundenzettel-Freigaben sind bereits erledigt und dürfen keinesfalls als offene Aufgaben vorgeschlagen werden.
 
 12. 🔍 OBLIGATORISCHE ANKLICKBARE QUELLENANGABEN (MARKDOWN-LINKS):
    - Jede einzelne Information, jedes Projektupdate, jede Vorbereitungsnotiz und jedes To-Do MUSS am Ende des jeweiligen Punkts mit einer genauen, ANKLICKBAREN Quellenangabe als Markdown-Link belegt werden (nutze die URLs aus "Direktlink:" im Kontext)!
    - Beispiele: \`[Quelle: Google Drive – "Transkript PK Montag"](https://...)\`, \`[Quelle: Google Chat – "Raum DATA Squad"](https://...)\`, \`[Quelle: Gmail – Betreff "...", 18.08.](https://...)\`, \`[Quelle: Google Kalender – "1:1 Marion"](https://...)\`, \`[Quelle: Google Tasks – Liste "Meine Aufgaben"](https://tasks.google.com/)\`.
 
-13. 📐 EINHEITLICHES AUSGABEFORMAT (4 ABSCHNITTE, DETERMINISTISCH & OHNE TABELLEN):
-   - Wenn ein Daily Briefing, Sync, Status-Bericht oder Lagebild angefragt wird, folge IMMER exakt dieser 4-teiligen Struktur:
-     # ☀️ Tägliches Management-Update (<Datum>)
-     <2-3 Sätze Executive Summary>
-     ---
-     ## 1. 🚨 Proaktive Kunden- & Meeting-Vorbereitung (Heute, Morgen & Montag)
-     - **<Kunde / Termin>** — <Datum / Zeit>
-       • **Agenda & Kontext:** <Inhalte & offene Punkte>
-       • **Vorbereitungs-Status & To-Dos:** <Was ist vorbereitet / was zu tun>
-       • [Quelle: <Name>](<URL>)
-     ---
-     ## 2. 📋 Lückenloser Status aller aktiven Kunden & Projekte
-     - **<Projektname>** (z. B. Schwarz / DSV, Koenig & Bauer, domcura, VOEST Alpine, Lorenz, Squad / Team)
-       • **Status:** <🟢 On Track / 🟡 In Klärung / 🟠 Wartend auf Input>
-       • **Aktueller Stand:** <Präziser Kontext>
-       • **Wartezustand & Nächste Schritte:** <Konkrete Aufgaben>
-       • [Quelle: <Name>](<URL>)
-     ---
-     ## 3. 🔮 Vorausschau & Wochenausblick (Nächste Tage / Montag)
-     - **<Fokusbereich / Tag>**
-       • **Anstehend:** <Fristen / Termine / Vorbereitungsbedarf>
-       • [Quelle: <Name>](<URL>)
-     ---
-     ## 4. 💡 Konkrete nächste Schritte & Handlungsempfehlungen
-     - **<Handlung / To-Do>** — Fälligkeit: <Datum>
-       • **Details:** <Wer, was, warum>
-       • [Quelle: <Name>](<URL>)
+ 13. 📐 EINHEITLICHES AUSGABEFORMAT (6 ABSCHNITTE, DETERMINISTISCH & OHNE TABELLEN):
+    - Wenn ein Daily Briefing, Sync, Status-Bericht oder Lagebild angefragt wird, folge IMMER exakt dieser Reihenfolge. Keine Executive Summary vor Abschnitt 1:
+      # ☀️ Tägliches Management-Update (<Datum>)
+      ---
+      ## 1. [ÄNDERUNG] Projekt- und Kapazitätsänderungen
+      - **<Projekt / Person / Planung>**
+        • **Änderung:** <Was ist neu oder anders>
+        • **Auswirkung:** <Konsequenz für Projekt, Kapazität oder Squad>
+        • [Quelle: <Name>](<URL>)
+      ---
+      ## 2. Squad Lead Control
+      - **Allocation / Billability / Booking / Projektplanung / David Weekly**
+        • <Aktueller Stand und offene Entscheidung>
+        • [Quelle: <Name>](<URL>)
+      ---
+      ## 3. 🚨 Proaktive Kunden- & Meeting-Vorbereitung (Heute, Morgen & Montag)
+      - **<Kunde / Termin>** — <Datum / Zeit>
+        • **Agenda & Kontext:** <Inhalte & offene Punkte>
+        • **Vorbereitungs-Status & To-Dos:** <Was ist vorbereitet / was zu tun>
+        • [Quelle: <Name>](<URL>)
+      ---
+      ## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte
+      - **<Projektname>** (z. B. Schwarz / DSV, Koenig & Bauer, domcura, VOEST Alpine, Lorenz, Squad / Team)
+        • **Status:** <🟢 On Track / 🟡 In Klärung / 🟠 Wartend auf Input>
+        • **Aktueller Stand:** <Präziser Kontext>
+        • **Wartezustand & Nächste Schritte:** <Konkrete Aufgaben>
+        • Nur Informationen, die nicht bereits in Abschnitt 1 oder 2 stehen.
+        • [Quelle: <Name>](<URL>)
+      ---
+      ## 5. 🔮 Vorausschau & Wochenausblick (Nächste Tage / Montag)
+      - **<Fokusbereich / Tag>**
+        • **Anstehend:** <Fristen / Termine / Vorbereitungsbedarf>
+        • [Quelle: <Name>](<URL>)
+      ---
+      ## 6. 💡 Konkrete nächste Schritte & Handlungsempfehlungen
+      - **<Handlung / To-Do>** — Fälligkeit: <Datum>
+        • **Details:** <Wer, was, warum>
+        • [Quelle: <Name>](<URL>)
+    - Vermeide Dopplungen: Änderungen gehören ausschließlich in Abschnitt 1, Squad-/Kapazitätskontrollen ausschließlich in Abschnitt 2. In späteren Abschnitten nur auf diese Punkte verweisen.
 
 14. 🛡️ MANDATORISCHE SELBSTKONTROLLE (SELF-AUDIT VOR DER AUSGABE):
    - Führe vor der Ausgabe eine interne Selbstkontrolle durch:
@@ -2660,12 +2779,15 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
   const tasksContext = await fetchTasks(oauth2Client);
   const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
   const localMemoryContext = loadLocalMemoryContext();
+  const currentSquadSignals = extractCurrentSquadSignals(driveContext, chatsContext);
+  const projectCapacityEvidence = extractProjectCapacityEvidence(driveContext, emailsContext, chatsContext);
   const skillContext = loadSkillContext([
     'workspace-context-ingestion',
     'task-state-reconciliation',
     'david-one-on-one-preparation',
     'daily-management-briefing',
     'project-and-customer-status',
+    'squad-lead-operations',
   ]);
 
   const nowStr = new Date().toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' });
@@ -2675,37 +2797,57 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
 VERBINDLICHE SKILLS FÜR DIESES DAILY:
 ${skillContext}
 
-WICHTIGE LAYOUT- & FORMATIERUNGSREGELN:
-- HEADER: Beginne direkt mit dem Briefing-Titel (z. B. "# ☀️ Tägliches Management-Update (${nowStr})") und einer prägnanten 2-3-Satz-Zusammenfassung der heutigen Prioritäten. KEINE Aufzählung von Datenquellen im Header!
+ WICHTIGE LAYOUT- & FORMATIERUNGSREGELN:
+ - HEADER: Beginne direkt mit dem Briefing-Titel (z. B. "# ☀️ Tägliches Management-Update (${nowStr})"). Keine Executive Summary und keine Aufzählung von Datenquellen vor Abschnitt 1!
 - STRIKTES TABELLEN-VERBOT: Verwende NIEMALS Markdown-Tabellen! Formatiere ALLE Inhalte in sauberen Text-Absätzen und Aufzählungslisten (Bullet Points).
 - ANKLICKBARE QUELLEN-LINKS: Jede Information und jedes To-Do MUSS am Ende mit einer anklickbaren Quellenangabe als Markdown-Link belegt werden (z. B. [Quelle: Google Drive – "Transkript PK Montag"](https://...), [Quelle: Gmail – Betreff "...", Datum](https://...), [Quelle: Google Kalender – "1:1 Marion"](https://...)). Nutze stets die Direktlinks aus den Quellen-Abschnitten!
 - KEINE IGNORIERTEN TERMINE IM BERICHT: Erstelle NIEMALS einen Abschnitt oder Punkt wie "Ignorierte interne Termine". "Thursdays for Data" wird komplett stillschweigend ignoriert.
 
-FESTE 4-TEILIGE BRIEFING-STRUKTUR:
+ FESTE 6-TEILIGE BRIEFING-STRUKTUR OHNE DOPPLUNGEN:
 
-# ☀️ Tägliches Management-Update (${nowStr})
-<2-3 prägnante Sätze Executive Summary / Fokus des Tages>
+ # ☀️ Tägliches Management-Update (${nowStr})
 
----
+ ---
 
-## 1. 🚨 Proaktive Kunden- & Meeting-Vorbereitung (Heute, Morgen & Montag)
-- **<Kunde / Termin>** — <Datum / Uhrzeit>
+ ## 1. [ÄNDERUNG] Projekt- und Kapazitätsänderungen
+ - **<Projekt / Person / Planung>**
+   • **Änderung:** <Was ist neu oder anders>
+   • **Auswirkung:** <Konsequenz für Projekt, Kapazität oder Squad>
+   • [Quelle: <Name>](<URL>)
+
+ ---
+
+ ## 2. Squad Lead Control
+ - **Allocation / Billability / Booking / Projektplanung / David Weekly**
+   • **Aktueller Stand:** <Nur aktuelle, source-backed Kontrollen>
+   • **Offene Entscheidung:** <Wer muss was klären, falls belegt>
+   • [Quelle: <Name>](<URL>)
+
+ ---
+
+ ## 3. 🚨 Proaktive Kunden- & Meeting-Vorbereitung (Heute, Morgen & Montag)
+ - **<Kunde / Termin>** — <Datum / Uhrzeit>
   • **Agenda & Kontext:** <Inhalte, Ziele, offene Fragen>
   • **Vorbereitungs-Status & To-Dos:** <Was ist vorbereitet / was ist heute zu tun>
   • [Quelle: <Name>](<URL>)
 
 ---
 
-## 2. 📋 Lückenloser Status aller aktiven Kunden & Projekte
+ ## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte
 - **<Projektname>** (z. B. Schwarz / DSV, Koenig & Bauer, domcura, VOEST Alpine, Lorenz, Squad / Team)
   • **Status:** <🟢 On Track / 🟡 In Klärung / 🟠 Wartend auf Input>
   • **Aktueller Stand:** <Präziser Kontext aus Drive, Mails, Chats>
-  • **Wartezustand & Nächste Schritte:** <Konkrete Aufgaben / Wer wartet auf wen>
+ • **Wartezustand & Nächste Schritte:** <Konkrete Aufgaben / Wer wartet auf wen>
+  • Wiederhole keine Inhalte aus Abschnitt 1 oder 2; verweise stattdessen kurz darauf.
   • [Quelle: <Name>](<URL>)
+
+Wenn Resource-Planner- oder Booking-Check-Daten in den Quellen vorhanden sind, füge danach den Unterabschnitt \`Squad Lead Control\` ein. Prüfe darin Allocation (mindestens 80% produktiv/billable und 100% geplant), aktuelle/erwartete Billability, Projektplanungs-Lücken sowie Booking Check / Odoo-Hibob-Deltas. Wenn diese Daten fehlen, nenne die fehlende Quelle ausdrücklich und behaupte keinen Status.
+
+Füge danach den Unterabschnitt \`Projekt- und Kapazitätsänderungen\` ein. Berücksichtige dort alle relevanten Quellen-Audit-Treffer, fasse materielle Änderungen mit dem Präfix \`[ÄNDERUNG]\` zusammen und verlinke jede Änderung mit der konkreten Quelle.
 
 ---
 
-## 3. 🔮 Vorausschau & Wochenausblick (Nächste Tage / Montag)
+ ## 5. 🔮 Vorausschau & Wochenausblick (Nächste Tage / Montag)
 - **<Fokusbereich / Wochentag>**
   • **Anstehende Fristen & Termine:** <Was steht an>
   • **Vorbereitungsbedarf vorab:** <Was muss heute/vorab vorbereitet werden>
@@ -2713,7 +2855,7 @@ FESTE 4-TEILIGE BRIEFING-STRUKTUR:
 
 ---
 
-## 4. 💡 Konkrete nächste Schritte & Handlungsempfehlungen
+ ## 6. 💡 Konkrete nächste Schritte & Handlungsempfehlungen
 - **<Handlungsempfehlung>** — Fälligkeit: <Datum>
   • **Details:** <Wer, was, warum>
   • [Quelle: <Name>](<URL>)
@@ -2730,12 +2872,18 @@ ${eventsContext}
 --- CHATS ---
 ${chatsContext}
 
+--- AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN ---
+${currentSquadSignals}
+
+--- PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT ---
+${projectCapacityEvidence}
+
 --- TO-DOS ---
 ${tasksContext}
 
 ${davidAgendaContext}
 
---- AUTORITATIVE NUTZERKORREKTUREN (ÜBERSCHREIBEN ÄLTERE QUELLEN) ---
+--- LOKALES MEMORY / EXPLIZITE NUTZERKORREKTUREN (nur aktuelle Korrekturen; alte Auslastungsfakten nicht wiederverwenden) ---
 ${localMemoryContext}
 `;
 
@@ -2748,6 +2896,7 @@ ${localMemoryContext}
 MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
 1. KEINE TABELLEN: Verwende NIEMALS Markdown-Tabellen. Stelle alle Status-Übersichten in klaren Text-Absätzen und Aufzählungslisten (Bullet Points) dar.
 2. KEIN QUELLENKATALOG IM HEADER: Keine Auflistungen wie "Kalender: Termine...", "E-Mails: Neueste 50..." im Header.
+2a. KEINE EXECUTIVE SUMMARY VOR ABSCHNITT 1: Nach dem Titel beginnt das Briefing unmittelbar mit den Projekt- und Kapazitätsänderungen.
 3. MANDATORISCHE AKTUALITÄTSPRÜFUNG: Überprüfe jedes Thema vor der Anzeige auf Aktualität. Wenn eine E-Mail, Notiz oder Aufgabe länger als 7-14 Tage zurückliegt und kein anstehender Termin oder offener Task vorliegt, ist das Thema inaktiv und wird NICHT mehr angezeigt.
    Konfliktpriorität: neueste explizite Nutzerkorrektur im lokalen Memory > Google-Tasks-Status > neueste datierte Mail/Chat/Meeting-Notiz > ältere Quelle. [ERLEDIGT] darf nie aus alten Quellen reaktiviert werden; [OFFEN] bleibt aktiv.
 4. Universelle Analyse von Transkripten & Projekt-Zuweisungen: Analysiere Transkripte und Mitschriften aus E-Mails, Drive und Besprechungen lückenlos und leite konkrete To-Dos für jede Hardy zugewiesene Aufgabe, Zusage oder Projektverantwortung ab.
@@ -2755,26 +2904,32 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
 6. Proaktive Meeting-Vorbereitung (spätestens 1 Tag vorher): Bereite Hardy auf Kunden- und Use-Case-Meetings (wie Schwarz / DSV) für heute, morgen und Montag basierend auf vorhandenen Notizen und eingetragenen Vorbereitungen vor.
 7. Vorausschau: Schaue vorausschauend auf Montag und die nächste Woche.
 8. Vollständigkeit: Gehe lückenlos alle aktiven, unerledigten Themen durch und synchronisiere sie mit den neuesten Quellen.
-9. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!
-10. Abgeschlossene Aufgaben: Alle mit [ERLEDIGT] markierten oder im lokalen Memory explizit abgeschlossenen Einzelaufgaben dürfen nie erneut vorgeschlagen werden. Projekte nicht pauschal abschliessen; offene Google Tasks desselben Projekts bleiben gültig.
-11. Ignorierte Termine: "Thursdays for Data" ist intern und wird immer still ignoriert. KEINEN Abschnitt "Ignorierte interne Termine" erstellen!
-12. Projekt-Fakten & Schreibweisen:
+8a. DOPPLUNGSVERBOT: Änderungen ausschließlich in Abschnitt 1, Squad-Lead-Kontrollen ausschließlich in Abschnitt 2. Projektstatus, Meetings und nächste Schritte dürfen diese Inhalte nicht vollständig wiederholen, sondern nur kurz darauf verweisen.
+9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
+10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden.
+10. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!
+11. Abgeschlossene Aufgaben: Alle mit [ERLEDIGT] markierten oder im lokalen Memory explizit abgeschlossenen Einzelaufgaben dürfen nie erneut vorgeschlagen werden. Projekte nicht pauschal abschliessen; offene Google Tasks desselben Projekts bleiben gültig.
+12. Ignorierte Termine: "Thursdays for Data" ist intern und wird immer still ignoriert. KEINEN Abschnitt "Ignorierte interne Termine" erstellen!
+13. Projekt-Fakten & Schreibweisen:
     - "domcura" (immer kleingeschrieben).
     - "VOEST Alpine" (immer "VOEST Alpine").
     - Koenig & Bauer: Interne Treffen finden statt, um Budgetfrage zu klären (aus PK vom Montag).
     - Lorenz Funding: Nicht nutzen, keine Screenshots/Anträge, Stunden werden intern umgebucht.
-    - Panda: Voll ausgelastet, keine Kapazitätswarnungen.
+    - Panda und Mario: Auslastung und Projektwünsche wöchentlich anhand der neuesten datierten Quellen aktualisieren; keine statische Kapazitätsaussage verwenden.
     - HiBob / Nils Traut: Stundenzettel-Freigaben sind erledigt, keinesfalls als Task vorschlagen.
-13. OBLIGATORISCHE ANKLICKBARE QUELLENANGABEN (MARKDOWN-LINKS):
+14. OBLIGATORISCHE ANKLICKBARE QUELLENANGABEN (MARKDOWN-LINKS):
     - Jedes Projektupdate, jeder Status, jede Vorbereitungsnotiz und jedes To-Do MUSS am Ende mit einer anklickbaren Quellenangabe als Markdown-Link belegt werden (nutze die URLs aus den Kontextblöcken, z. B. \`[Quelle: Google Drive – "Transkript PK"](https://...)\`, \`[Quelle: Google Chat – "DATA Squad"](https://...)\`, \`[Quelle: Gmail – Betreff "...", Datum](https://...)\`, \`[Quelle: Google Kalender – Termin ...](https://...)\`, \`[Quelle: Google Tasks – Liste "..."](https://tasks.google.com/)\`).
-14. TEAM & ONBOARDING NEUER MITARBEITER (Z. B. SEPTEMBER):
+15. TEAM & ONBOARDING NEUER MITARBEITER (Z. B. SEPTEMBER):
     - Einarbeitungspläne und Onboarding-Konzepte für neue Teammitglieder (insbesondere für September) sind strategische Führungsaufgaben von Squad Lead Hardy. Proaktiv in die Vorausschau und Handlungsempfehlungen aufnehmen und konkrete Vorbereitungs-To-Dos (Einarbeitungsplan abstimmen, Hardware/Zugänge prüfen, Buddy festlegen, 1:1 Termine und Schulungsslots im Kalender einstellen) ableiten!
-15. SELBSTKONTROLLE & LÜCKENLOSE VOLLSTÄNDIGKEIT:
+16. SELBSTKONTROLLE & LÜCKENLOSE VOLLSTÄNDIGKEIT:
     - Kontrolliere vor der Ausgabe selbst, ob alle aktiven Kundenprojekte, Onboarding-Pläne, offenen Tasks, Termine und neuen Chat-/Mail-Inhalte vollständig und transparent erfasst sind und kein Punkt 4 für ignorierte Termine existiert.\n\n${getActionProposalsInstruction()}`
     }
   });
 
-  const summary = sanitizeActionProposals(response.text || "Kein Update generiert.", tasksContext, eventsContext);
+  const summary = validateDailyBriefingStructure(sanitizeCurrentSquadCapacityClaims(
+    sanitizeActionProposals(response.text || "Kein Update generiert.", tasksContext, eventsContext),
+    currentSquadSignals,
+  ));
 
   try {
     const generatedMemoryFiles = await generateStructuredMemoryConcepts({
@@ -2845,6 +3000,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
   
   let emailSent = false;
   let emailErrorMsg = null;
+  let emailMessageId: string | null = null;
   
   // E-Mail senden
   try {
@@ -2854,14 +3010,17 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     
     if (emailAddress) {
       const cleanEmailContent = cleanContentForEmail(summary);
-      const utf8Subject = `=?utf-8?B?${Buffer.from(`Dein tägliches Memory Update - ${dateStr}`).toString('base64')}?=`;
+      const utf8Subject = `=?utf-8?B?${Buffer.from(`PCG Agent Daily Briefing - ${dateStr}`).toString('base64')}?=`;
+      const encodedBody = Buffer.from(cleanEmailContent, 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
       const messageParts = [
+        `From: ${emailAddress}`,
         `To: ${emailAddress}`,
-        'Content-Type: text/plain; charset=utf-8',
+        'Content-Type: text/plain; charset="UTF-8"',
+        'Content-Transfer-Encoding: base64',
         'MIME-Version: 1.0',
         `Subject: ${utf8Subject}`,
         '',
-        cleanEmailContent,
+        encodedBody,
       ];
       const emailBody = messageParts.join('\r\n');
       const encodedMessage = Buffer.from(emailBody)
@@ -2870,10 +3029,11 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
         .replace(/\//g, '_')
         .replace(/=+$/, '');
         
-      await gmail.users.messages.send({
+      const sentMessage = await gmail.users.messages.send({
         userId: 'me',
         requestBody: { raw: encodedMessage }
       });
+      emailMessageId = sentMessage.data.id || null;
       console.log("Email sent successfully to", emailAddress);
       emailSent = true;
     }
@@ -2883,7 +3043,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     // Continue even if email fails, so we don't break the whole process if only email failed
   }
   
-  const result = { summary, emailSent, emailErrorMsg, lastRunAt: new Date().toISOString(), dateStr, success: true, createdTasks };
+  const result = { summary, emailSent, emailErrorMsg, emailMessageId, lastRunAt: new Date().toISOString(), dateStr, success: true, createdTasks };
   saveCronStatus(result);
   return result;
 }

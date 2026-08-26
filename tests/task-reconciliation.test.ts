@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { detectStructuredMemoryChanges, extractDavidOneOnOneAgenda, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals } from '../server.ts';
+import { detectStructuredMemoryChanges, extractDavidOneOnOneAgenda, extractProjectCapacityEvidence, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals, sanitizeCurrentSquadCapacityClaims, validateDailyBriefingStructure } from '../server.ts';
 
 const tasksContext = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
 OFFEN:
@@ -69,6 +69,57 @@ test('loads only allowlisted workflow skills', () => {
   assert.match(result, /SKILL: task-state-reconciliation/);
   assert.match(result, /SKILL: chat-command-safety/);
   assert.doesNotMatch(result, /server\.ts/);
+});
+
+test('keeps current Panda capacity proposals for source-backed review', () => {
+  const text = `<ACTION_PROPOSALS>
+[
+  {"type":"task","title":"Panda: neue Projekte prüfen","details":{"notes":"Im aktuellen Weekly nach neuen Projekten gefragt."}}
+]
+</ACTION_PROPOSALS>`;
+
+  const result = sanitizeActionProposals(text, '', '');
+
+  assert.match(result, /Panda: neue Projekte prüfen/);
+});
+
+test('replaces stale Panda full-capacity claims with the latest source signal', () => {
+  const result = sanitizeCurrentSquadCapacityClaims(
+    '- **Squad DATA & AI**: Panda ist voll ausgelastet.',
+    '--- DOKUMENT / TRANSKRIPT: "AI/ DATA Team AWS Weekly - 2026/08/25" | Direktlink: https://example.test/weekly ---\nSudipt Panda meldet keine klare Pipeline und kein festes Budget; weitere Ideen für neue Projekte stehen im Raum.',
+  );
+
+  assert.match(result, /keine klare Pipeline/);
+  assert.doesNotMatch(result, /Panda ist voll ausgelastet/);
+  assert.match(result, /example\.test\/weekly/);
+});
+
+test('applies the same freshness guard to every squad member', () => {
+  const result = sanitizeCurrentSquadCapacityClaims(
+    '- **Mario Pasculli** ist voll ausgelastet.\n- **Enrico Goerlitz** ist voll ausgelastet.',
+    '--- DOKUMENT / TRANSKRIPT: "Weekly" | Direktlink: https://example.test/weekly ---\nMario Pasculli hat Kapazität für neue Projekte.',
+  );
+
+  assert.match(result, /Mario Pasculli meldet laut aktueller datierter Quelle Kapazitätsbedarf/);
+  assert.match(result, /Enrico Goerlitzs aktueller Auslastungsstatus ist .* nicht belegt/);
+});
+
+test('preserves project and capacity evidence for the source audit', () => {
+  const result = extractProjectCapacityEvidence(
+    '--- DOKUMENT / TRANSKRIPT: "Weekly" | Direktlink: https://example.test/weekly ---\nPanda fragt nach neuen Projekten und Mario soll für AI Gateway eingeplant werden.',
+    'Betreff: Projektbudget und Staffing für September',
+    'Resource Planner und Billability im Squad prüfen.',
+  );
+
+  assert.match(result, /Panda fragt nach neuen Projekten/);
+  assert.match(result, /Projektbudget und Staffing/);
+  assert.match(result, /Resource Planner/);
+});
+
+test('repairs an orphaned project status from its source link', () => {
+  const result = validateDailyBriefingStructure(`# ☀️ Tägliches Management-Update\n\n## 1. [ÄNDERUNG] Projekt- und Kapazitätsänderungen\n\n## 2. Squad Lead Control\n\n## 3. 🚨 Proaktive Kunden- & Meeting-Vorbereitung\n\n## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte\n\n- **VOEST Alpine**\n  • **Status:** On Track\n\n  • **Status:** In Klärung\n  • [Quelle: Google Drive – "projects/lorenz-snack-world.md"](https://example.test/lorenz)\n\n## 5. 🔮 Vorausschau & Wochenausblick\n\n## 6. 💡 Konkrete nächste Schritte & Handlungsempfehlungen`);
+
+  assert.match(result, /- \*\*Lorenz Snack World\*\*\n  • \*\*Status:\*\* In Klärung/);
 });
 
 test('removes completed task from recommendations and proposals', () => {

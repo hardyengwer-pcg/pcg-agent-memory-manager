@@ -12,13 +12,15 @@ Produce a concise, source-backed daily briefing from the curated memory and curr
 4. Prepare today's, tomorrow's and next-working-day meetings.
 5. Separate project status, customer context, squad topics and general priorities.
 6. Reconcile every recommendation against Google Tasks.
-7. Send the final briefing by email and split it into Google Chat messages.
+7. Check the Squad Lead Operations skill for the monthly allocation, weekly billability and booking controls.
+8. Send the final briefing by email and split it into Google Chat messages.
 
 ## Output
 
-- Executive summary
+- Project and capacity changes, marked with `[ÄNDERUNG]`
+- Squad Lead Control: allocation, billability, project planning, booking completeness and David Weekly
 - Meeting preparation
-- Project and customer status
+- Project and customer status without repeating the change/control sections
 - Squad and general outlook
 - Concrete next steps with sources
 
@@ -27,3 +29,5 @@ Produce a concise, source-backed daily briefing from the curated memory and curr
 - No markdown tables.
 - Every material statement needs a clickable source.
 - Never include ignored internal meetings as a separate section.
+- Do not add an executive summary before the change section.
+- Do not repeat the same change or capacity fact in later sections.
