@@ -288,14 +288,14 @@ function getEffectiveApiConfig(customApiKey?: string, customBaseUrl?: string) {
     }
   } else {
     // If not using an sk- LiteLLM key, route directly to Google Gemini API
-    baseUrl = 'https://generativelanguage.googleapis.com';
+    baseUrl = '';
   }
 
   if (baseUrl) {
     baseUrl = normalizeAiBaseUrl(baseUrl);
   }
 
-  const isGateway = (apiKey.startsWith('sk-') || (baseUrl.includes('gateway') || baseUrl.includes('pcg')));
+  const isGateway = Boolean(baseUrl && (baseUrl.includes('gateway') || baseUrl.includes('pcg')));
 
   return { apiKey, baseUrl, isGateway };
 }
@@ -465,6 +465,9 @@ export async function generateAIContent(options: {
   if (isGateway) {
     const gatewayCandidates = [
       targetModel,
+      'Standard',
+      'Pro',
+      'Expert',
       'gemini-3.5-flash',
       'pcg-auto-pro',
       'gemini-2.5-pro',
@@ -519,7 +522,11 @@ export async function generateAIContent(options: {
     const isQuotaError = err?.status === 429 || err?.code === 429 || fullStr.includes('quota') || fullStr.includes('Quota') || fullStr.includes('RESOURCE_EXHAUSTED');
 
     if (isAccessDenied || isInvalidModel || isQuotaError) {
-      const directCandidates = ['gemini-3.7-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite'].filter(m => m !== targetModel);
+      if (isQuotaError) {
+        console.log('[AI Generation] Rate-Limit erreicht (429). Warte 35 Sekunden vor Fallback...');
+        await new Promise(resolve => setTimeout(resolve, 35000));
+      }
+      const directCandidates = ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'].filter(m => m !== targetModel);
 
       for (const fallbackModel of directCandidates) {
         try {
@@ -1158,33 +1165,38 @@ async function listAllFiles(drive: any, folderId: string, pathPrefix = '') {
 
 async function getFileContent(drive: any, fileId: string, mimeType: string) {
   try {
-    if (mimeType.includes('google-apps.document')) {
-      const res = await drive.files.export({
-        fileId,
-        mimeType: 'text/plain',
-      });
-      return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-    } else if (mimeType.includes('google-apps.spreadsheet')) {
-      const res = await drive.files.export({
-        fileId,
-        mimeType: 'text/csv',
-      });
-      return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-    } else if (mimeType.includes('google-apps.presentation')) {
-      const res = await drive.files.export({
-        fileId,
-        mimeType: 'text/plain',
-      });
-      return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-    } else {
-      const res = await drive.files.get({
-        fileId,
-        alt: 'media',
-      });
-      if (typeof res.data === 'string') return res.data;
-      if (Buffer.isBuffer(res.data)) return res.data.toString('utf-8');
-      return typeof res.data === 'object' ? JSON.stringify(res.data) : String(res.data);
-    }
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout reading file')), 12000));
+    const downloadPromise = (async () => {
+      if (mimeType.includes('google-apps.document')) {
+        const res = await drive.files.export({
+          fileId,
+          mimeType: 'text/plain',
+        });
+        return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      } else if (mimeType.includes('google-apps.spreadsheet')) {
+        const res = await drive.files.export({
+          fileId,
+          mimeType: 'text/csv',
+        });
+        return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      } else if (mimeType.includes('google-apps.presentation')) {
+        const res = await drive.files.export({
+          fileId,
+          mimeType: 'text/plain',
+        });
+        return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      } else {
+        const res = await drive.files.get({
+          fileId,
+          alt: 'media',
+        });
+        if (typeof res.data === 'string') return res.data;
+        if (Buffer.isBuffer(res.data)) return res.data.toString('utf-8');
+        return typeof res.data === 'object' ? JSON.stringify(res.data) : String(res.data);
+      }
+    })();
+
+    return await Promise.race([downloadPromise, timeoutPromise]) as string | null;
   } catch (e: any) {
     console.warn(`Drive file reading notice ${fileId}:`, e?.message || e);
     return null;
@@ -1719,18 +1731,20 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
       /einarbeitung|onboarding|mitarbeiter|plan|september|welcome|joiner|schulung|training|squad|data|schwarz|dsv|vorbereitung|use\s*case|protokoll|transkript|transcript|meeting|notes|briefing|koenig|bauer|pk|lorenz|domcura|voest|alpine/i.test(f.name)
     );
 
-    // Sort by modifiedTime descending so freshest notes come first
+    // Sort by modifiedTime descending so freshest notes come first, limit to top 10 files to stay comfortably under the 250k token/min rate limit
     eligibleFiles.sort((a, b) => {
       const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
       const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
       return timeB - timeA;
     });
 
+    const topFiles = eligibleFiles.slice(0, 10);
+
     let contextData = "";
-    for (const file of eligibleFiles) {
+    for (const file of topFiles) {
       const content = await getFileContent(drive, file.id, file.mimeType);
       if (content && typeof content === 'string') {
-        const truncated = content.length > 8000 ? content.slice(0, 8000) + "\n...[Gekürzt wegen Länge]" : content;
+        const truncated = content.length > 2500 ? content.slice(0, 2500) + "\n...[Gekürzt wegen Länge]" : content;
         
         const modDateObj = file.modifiedTime ? new Date(file.modifiedTime) : null;
         const modDateStr = modDateObj ? modDateObj.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
