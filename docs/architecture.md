@@ -7,6 +7,9 @@
 | `src/` | React-UI mit Firebase Google Sign-In |
 | `server.ts` | Lokale Express-API, Google Workspace, AI-Generierung und Briefing-Logik |
 | `cli.ts` | Headless-Kommandos und OAuth-Refresh-Token-Verwaltung |
+| `verbatim-evidence-ledger.ts` | Unveränderlicher Rohquellen-Ledger mit SHA-256 Hashes, Zeitstempeln und Hybridsuche |
+| `temporal-facts.ts` | Temporales Faktenmodell mit Gültigkeitsfenstern und automatischer Invalidierung |
+| `decision-memory.ts` | Entscheidungsgedächtnis mit Begründungen, verworfenen Alternativen und Tags |
 | Google Workspace | Datenquellen und Zielsysteme fuer Aktionen |
 | Gemini oder PCG Gateway | Zusammenfassung, Antwortgenerierung und Transkription |
 
@@ -14,14 +17,15 @@
 
 1. Die Web-UI meldet sich via Firebase mit Google an und erhaelt einen kurzlebigen Access-Token.
 2. Die lokale API validiert Token und Kontoinhaber gegen `GOOGLE_ALLOWED_EMAIL`.
-3. Der Agent liest nur die benoetigten Workspace-Daten und erzeugt daraus Kontext.
-4. Der Kontext geht an das konfigurierte, freigegebene AI-Gateway.
-5. Die UI zeigt Vorschlaege. Seiteneffekte wie E-Mails, Kalendertermine oder Tasks erfordern eine explizite Aktion in der UI.
+3. Workspace-Rohdaten (Drive, Gmail, Chat, Kalender, Tasks) werden unverändert im lokalen **Verbatim Evidence Ledger** (`.evidence-ledger/evidence.jsonl`) mit SHA-256 Hash und Versionierung archiviert.
+4. Der Kontext geht an das konfigurierte AI-Modell (Google Gemini oder freigegebenes Gateway).
+5. Das tägliche Management-Briefing folgt einer festen 6-stufigen Struktur mit strikter Validierung (Änderungen & Squad Control oben, keine Dopplungen).
+6. Die UI zeigt Vorschlaege. Seiteneffekte wie E-Mails, Kalendertermine oder Tasks erfordern eine explizite Aktion in der UI oder im Daily-Lauf.
 
 ## Ausfuehrungsmodi
 
 - **Web:** lokale UI fuer interaktive Recherche und bestaetigte Aktionen.
-- **CLI:** fuer headless Briefings, Einzelaktionen und Windows Task Scheduler.
+- **CLI:** fuer headless Briefings, Quellensuche, Faktenabfrage, Entscheidungsablage und Windows Task Scheduler.
 - **Google Chat:** `chat-process` liest neue Nachrichten im konfigurierten Raum und antwortet darauf.
 
 ## Persistenz
@@ -33,7 +37,8 @@ Die Anwendung speichert lokal OAuth- und Laufzeitdaten. Diese Dateien sind absic
 - `.ai_settings.json`
 - `.chat-state.json`
 - `.last_cron_status.json`
-- `agent-memory/`
+- `agent-memory/` (kuratierte OKF-Konzepte)
+- `.evidence-ledger/` (unveränderliche Rohdaten `evidence.jsonl`, temporale Fakten `temporal-facts.jsonl`, Entscheidungen `decisions.jsonl`)
 
 ## Sicherheitsgrenzen
 
