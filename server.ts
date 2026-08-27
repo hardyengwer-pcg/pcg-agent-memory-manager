@@ -110,6 +110,52 @@ export function clearStoredToken() {
   }
 }
 
+const DEFAULT_CLIENT_ID = '261415172337-16a674uqih6mk269b0hj8q61qguq6scp.apps.googleusercontent.com';
+const REFRESH_FILE = path.join(process.cwd(), 'agent-memory', '.google-refresh-token.json');
+
+export function loadRefreshToken(): string | null {
+  if (process.env.GOOGLE_REFRESH_TOKEN) return process.env.GOOGLE_REFRESH_TOKEN;
+  try {
+    if (fs.existsSync(REFRESH_FILE)) {
+      const data = JSON.parse(fs.readFileSync(REFRESH_FILE, 'utf-8'));
+      if (data.refresh_token) return data.refresh_token;
+    }
+  } catch {}
+  return null;
+}
+
+export async function getValidAccessToken(): Promise<string | null> {
+  const existing = loadStoredToken();
+  if (existing) return existing;
+
+  const refreshToken = loadRefreshToken();
+  if (!refreshToken) return null;
+
+  try {
+    const params = new URLSearchParams({
+      client_id: process.env.GOOGLE_CLIENT_ID || DEFAULT_CLIENT_ID,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    });
+    if (process.env.GOOGLE_CLIENT_SECRET) {
+      params.append('client_secret', process.env.GOOGLE_CLIENT_SECRET);
+    }
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+    const data: any = await res.json();
+    if (data.access_token) {
+      saveToken(data.access_token);
+      return data.access_token;
+    }
+  } catch (e: any) {
+    console.warn('[Token Auto-Refresh] Fehler:', e?.message || e);
+  }
+  return null;
+}
+
 export function loadStoredToken(): string | null {
   if (latestAccessToken) return latestAccessToken;
   try {
@@ -3373,21 +3419,21 @@ app.post('/api/cron/trigger', async (req, res) => {
   }
 });
 
-// Täglich um 9:00 Uhr laufen lassen (Europe/Berlin Zeit)
+// Täglich um 8:00 Uhr laufen lassen (Europe/Berlin Zeit) mit automatischem Refresh-Token
 if (isMain) {
-cron.schedule('0 9 * * *', async () => {
-  const token = loadStoredToken();
+cron.schedule('0 8 * * *', async () => {
+  const token = await getValidAccessToken();
   if (!token) {
-    console.log("Daily update skipped at 09:00: No stored access token available.");
+    console.log("Daily update skipped at 08:00: No valid access token or refresh token available.");
     saveCronStatus({
       lastRunAt: new Date().toISOString(),
       dateStr: new Date().toISOString().split('T')[0],
-      error: "Übersprungen: Kein Zugriffstoken vorhanden. Bitte im Browser anmelden.",
+      error: "Übersprungen: Kein Zugriffstoken vorhanden. Bitte im Browser oder via 'npm run agent -- auth' anmelden.",
       success: false
     });
     return;
   }
-  console.log("Running daily automated update at 09:00...");
+  console.log("Running daily automated update at 08:00...");
   try {
     await performDailyUpdate(token);
     console.log("Daily update completed successfully.");
