@@ -57,20 +57,20 @@ npm run agent -- decision-search "Kostenfaktor" [--project "Koenig & Bauer"]
 
 `run-agent.cmd` ist ein Wrapper mit Logdatei. `run-agent-hidden.vbs` startet ihn ohne sichtbares Konsolenfenster.
 
-Die lokale Einrichtung verwendet morgens um 08:00 Uhr das Briefing und abends um 18:00 Uhr die Chat-Anweisungsverarbeitung:
+Die lokale Einrichtung verwendet an Werktagen (Montag bis Freitag) morgens um 08:00 Uhr das Briefing und abends um 18:00 Uhr die Chat-Anweisungsverarbeitung:
 
 ```powershell
 $project = "C:\Pfad\zum\Projekt"
-schtasks /create /tn "PCG Agent Daily" /tr "wscript.exe `"$project\run-agent-hidden.vbs`" daily" /sc daily /st 08:00 /f
-schtasks /create /tn "PCG Agent Chat EOD" /tr "wscript.exe `"$project\run-agent-hidden.vbs`" chat-process" /sc daily /st 18:00 /f
+schtasks /create /tn "PCG Agent Daily" /tr "wscript.exe `"$project\run-agent-hidden.vbs`" daily" /sc weekly /d MON,TUE,WED,THU,FRI /st 08:00 /f
+schtasks /create /tn "PCG Agent Chat EOD" /tr "wscript.exe `"$project\run-agent-hidden.vbs`" chat-process" /sc weekly /d MON,TUE,WED,THU,FRI /st 18:00 /f
 ```
 
 Oder direkt als PowerShell-Scheduled-Task registrieren:
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -Command `"Set-Location -LiteralPath 'C:\Users\HardyEngwer\antigravity\Remix-PCG-Agent-Memory-Manager-und-Assistent-2026-08-18-aca67'; npm run agent -- daily`""
-$trigger = New-ScheduledTaskTrigger -Daily -At 08:00AM
-Register-ScheduledTask -TaskName "PCG_Agent_Daily_0800" -Action $action -Trigger $trigger -Description "Tägliches PCG Agent Management-Briefing um 08:00 Uhr" -Force
+$action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"C:\Users\HardyEngwer\antigravity\Remix-PCG-Agent-Memory-Manager-und-Assistent-2026-08-18-aca67\run-agent-hidden.vbs`" daily" -WorkingDirectory "C:\Users\HardyEngwer\antigravity\Remix-PCG-Agent-Memory-Manager-und-Assistent-2026-08-18-aca67"
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At 08:00AM
+Register-ScheduledTask -TaskName "PCG_Agent_Daily" -Action $action -Trigger $trigger -Description "Tägliches PCG Agent Management-Briefing Mo-Fr um 08:00 Uhr" -Force
 ```
 
 Alternativ kann Google Chat häufiger per Polling betrieben werden:

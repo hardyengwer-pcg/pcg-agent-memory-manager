@@ -3437,9 +3437,9 @@ app.post('/api/cron/trigger', async (req, res) => {
   }
 });
 
-// Täglich um 8:00 Uhr laufen lassen (Europe/Berlin Zeit) mit automatischem Refresh-Token
+// An Werktagen (Montag bis Freitag) um 8:00 Uhr laufen lassen (Europe/Berlin Zeit) mit automatischem Refresh-Token
 if (isMain) {
-cron.schedule('0 8 * * *', async () => {
+cron.schedule('0 8 * * 1-5', async () => {
   const token = await getValidAccessToken();
   if (!token) {
     console.log("Daily update skipped at 08:00: No valid access token or refresh token available.");
@@ -3451,7 +3451,7 @@ cron.schedule('0 8 * * *', async () => {
     });
     return;
   }
-  console.log("Running daily automated update at 08:00...");
+  console.log("Running daily automated update at 08:00 (Mon-Fri)...");
   try {
     await performDailyUpdate(token);
     console.log("Daily update completed successfully.");
