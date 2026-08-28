@@ -760,91 +760,100 @@ export async function fetchRecentEmails(auth: any) {
     }
 
     const parsedEmails: any[] = [];
-    
-    for (const msgId of allMsgIds) {
-      try {
-        const mRes = await gmail.users.messages.get({
-          userId: 'me',
-          id: msgId,
-          format: 'full'
-        });
-        const headers = mRes.data.payload?.headers;
-        const labelIds = mRes.data.labelIds || [];
-        const subject = headers?.find(h => h.name === 'Subject')?.value || '(Kein Betreff)';
-        const from = headers?.find(h => h.name === 'From')?.value || 'Unbekannt';
-        const date = headers?.find(h => h.name === 'Date')?.value || '';
-        const snippet = mRes.data.snippet || '';
-        const internalDate = Number(mRes.data.internalDate) || (date ? new Date(date).getTime() : 0);
+    const chunkSize = 10;
+    for (let i = 0; i < allMsgIds.length; i += chunkSize) {
+      const chunk = allMsgIds.slice(i, i + chunkSize);
+      const chunkResults = await Promise.all(
+        chunk.map(async (msgId) => {
+          try {
+            const mRes = await gmail.users.messages.get({
+              userId: 'me',
+              id: msgId,
+              format: 'full'
+            });
+            const headers = mRes.data.payload?.headers;
+            const labelIds = mRes.data.labelIds || [];
+            const subject = headers?.find(h => h.name === 'Subject')?.value || '(Kein Betreff)';
+            const from = headers?.find(h => h.name === 'From')?.value || 'Unbekannt';
+            const date = headers?.find(h => h.name === 'Date')?.value || '';
+            const snippet = mRes.data.snippet || '';
+            const internalDate = Number(mRes.data.internalDate) || (date ? new Date(date).getTime() : 0);
 
-        if (labelIds.includes('TRASH') || labelIds.includes('SPAM')) continue;
+            if (labelIds.includes('TRASH') || labelIds.includes('SPAM')) return null;
 
-        let statusStr = "Posteingang (Aktiv)";
-        if (!labelIds.includes('INBOX')) {
-          statusStr = "ARCHIVIERT";
-        }
-
-        // Extract body text & attachments
-        let emailBodyText = "";
-        const attachmentsList: string[] = [];
-
-        const extractParts = (part: any) => {
-          if (!part) return;
-          if (part.filename) {
-            attachmentsList.push(part.filename);
-          }
-          if (part.mimeType === 'text/plain' && part.body?.data) {
-            try {
-              const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
-              emailBodyText += decoded + "\n";
-            } catch {}
-          } else if (part.mimeType === 'text/html' && part.body?.data && !emailBodyText) {
-            try {
-              const decodedHtml = Buffer.from(part.body.data, 'base64').toString('utf-8');
-              const textClean = decodedHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                                           .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-                                           .replace(/<[^>]+>/g, ' ')
-                                           .replace(/\s+/g, ' ')
-                                           .trim();
-              emailBodyText += textClean + "\n";
-            } catch {}
-          }
-          if (part.parts && Array.isArray(part.parts)) {
-            for (const subPart of part.parts) {
-              extractParts(subPart);
+            let statusStr = "Posteingang (Aktiv)";
+            if (!labelIds.includes('INBOX')) {
+              statusStr = "ARCHIVIERT";
             }
+
+            // Extract body text & attachments
+            let emailBodyText = "";
+            const attachmentsList: string[] = [];
+
+            const extractParts = (part: any) => {
+              if (!part) return;
+              if (part.filename) {
+                attachmentsList.push(part.filename);
+              }
+              if (part.mimeType === 'text/plain' && part.body?.data) {
+                try {
+                  const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
+                  emailBodyText += decoded + "\n";
+                } catch {}
+              } else if (part.mimeType === 'text/html' && part.body?.data && !emailBodyText) {
+                try {
+                  const decodedHtml = Buffer.from(part.body.data, 'base64').toString('utf-8');
+                  const textClean = decodedHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                                               .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                                               .replace(/<[^>]+>/g, ' ')
+                                               .replace(/\s+/g, ' ')
+                                               .trim();
+                  emailBodyText += textClean + "\n";
+                } catch {}
+              }
+              if (part.parts && Array.isArray(part.parts)) {
+                for (const subPart of part.parts) {
+                  extractParts(subPart);
+                }
+              }
+            };
+
+            if (mRes.data.payload) {
+              extractParts(mRes.data.payload);
+            }
+
+            // Clean and slice body text for prompt context
+            let bodySnippet = emailBodyText.replace(/\r?\n+/g, ' ').trim();
+            if (bodySnippet.length > 2500) {
+              bodySnippet = bodySnippet.slice(0, 2500) + '... [Gekürzt]';
+            }
+            if (!bodySnippet) {
+              bodySnippet = snippet;
+            }
+
+            const isTranscriptOrProject = /transcript|transkript|meeting\s*notes|protokoll|summary|zusammenfassung|action\s*items?|todo|to-do|aufgabe|zugewiesen|projekt|next\s*steps|handover|scoping|proposal|sow|statement\s*of\s*work|use\s*cases?|review|retrospective|alignment|sync|briefing|absprache/i.test(subject) ||
+                                         /transcript|transkript|meeting\s*notes|protokoll|summary|zusammenfassung|action\s*items?|todo|to-do|aufgabe|zugewiesen|projekt|next\s*steps|handover|scoping|proposal|sow|statement\s*of\s*work|use\s*cases?|review|retrospective|alignment|sync|briefing|absprache/i.test(bodySnippet);
+
+            return {
+              id: msgId,
+              internalDate,
+              statusStr,
+              from,
+              subject,
+              date,
+              bodySnippet,
+              bodyText: emailBodyText || snippet,
+              attachments: attachmentsList.join(', '),
+              isTranscriptOrProject
+            };
+          } catch (singleMsgErr: any) {
+            console.warn(`Gmail msg get notice ${msgId}:`, singleMsgErr?.message || singleMsgErr);
+            return null;
           }
-        };
-
-        if (mRes.data.payload) {
-          extractParts(mRes.data.payload);
-        }
-
-        // Clean and slice body text for prompt context
-        let bodySnippet = emailBodyText.replace(/\r?\n+/g, ' ').trim();
-        if (bodySnippet.length > 2500) {
-          bodySnippet = bodySnippet.slice(0, 2500) + '... [Gekürzt]';
-        }
-        if (!bodySnippet) {
-          bodySnippet = snippet;
-        }
-
-        const isTranscriptOrProject = /transcript|transkript|meeting\s*notes|protokoll|summary|zusammenfassung|action\s*items?|todo|to-do|aufgabe|zugewiesen|projekt|next\s*steps|handover|scoping|proposal|sow|statement\s*of\s*work|use\s*cases?|review|retrospective|alignment|sync|briefing|absprache/i.test(subject) ||
-                                     /transcript|transkript|meeting\s*notes|protokoll|summary|zusammenfassung|action\s*items?|todo|to-do|aufgabe|zugewiesen|projekt|next\s*steps|handover|scoping|proposal|sow|statement\s*of\s*work|use\s*cases?|review|retrospective|alignment|sync|briefing|absprache/i.test(bodySnippet);
-
-        parsedEmails.push({
-          id: msgId,
-          internalDate,
-          statusStr,
-          from,
-          subject,
-          date,
-          bodySnippet,
-          bodyText: emailBodyText || snippet,
-          attachments: attachmentsList.join(', '),
-          isTranscriptOrProject
-        });
-      } catch (singleMsgErr: any) {
-        console.warn(`Gmail msg get notice ${msgId}:`, singleMsgErr?.message || singleMsgErr);
+        })
+      );
+      for (const res of chunkResults) {
+        if (res) parsedEmails.push(res);
       }
     }
 
@@ -2993,14 +3002,22 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
     console.warn('[Memory Sync] Drive-Synchronisierung übersprungen:', memoryErr?.message || memoryErr);
   }
 
-  // Always perform a live, fresh evaluation of all connected Google Workspace sources
+  // Always perform a live, fresh evaluation of all connected Google Workspace sources in parallel
   console.log(`[Daily Briefing] Performing live real-time analysis for ${dateStr}...`);
 
-  const driveContext = await fetchDriveKnowledgeBaseContext(accessToken);
-  const emailsContext = await fetchRecentEmails(oauth2Client);
-  const eventsContext = await fetchUpcomingEvents(oauth2Client);
-  const chatsContext = await fetchRecentChats(oauth2Client);
-  const tasksContext = await fetchTasks(oauth2Client);
+  const [
+    driveContext,
+    emailsContext,
+    eventsContext,
+    chatsContext,
+    tasksContext
+  ] = await Promise.all([
+    fetchDriveKnowledgeBaseContext(accessToken),
+    fetchRecentEmails(oauth2Client),
+    fetchUpcomingEvents(oauth2Client),
+    fetchRecentChats(oauth2Client),
+    fetchTasks(oauth2Client)
+  ]);
   const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
   const localMemoryContext = loadLocalMemoryContext();
   const currentSquadSignals = extractCurrentSquadSignals(driveContext, chatsContext);
