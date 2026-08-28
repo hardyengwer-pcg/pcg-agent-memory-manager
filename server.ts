@@ -516,17 +516,21 @@ export async function generateAIContent(options: {
     console.warn("AI Generation Error for model:", targetModel, "Error:", err?.message || err);
     const fullStr = (err?.message || '') + ' ' + JSON.stringify(err || {});
     
-    // Check for access denied, invalid model name, quota exhausted, or 403 errors
+    // Check for access denied, invalid model name, quota exhausted, 503 unavailable, or 403 errors
     const isAccessDenied = fullStr.includes('key_model_access_denied') || fullStr.includes('not allowed to access model') || fullStr.includes('403') || fullStr.includes('Forbidden') || err?.status === 403 || err?.code === 403;
     const isInvalidModel = fullStr.includes('Invalid model name passed in model=') || fullStr.includes('invalid model');
     const isQuotaError = err?.status === 429 || err?.code === 429 || fullStr.includes('quota') || fullStr.includes('Quota') || fullStr.includes('RESOURCE_EXHAUSTED');
+    const isUnavailable = err?.status === 503 || err?.code === 503 || fullStr.includes('503') || fullStr.includes('UNAVAILABLE') || fullStr.includes('high demand');
 
-    if (isAccessDenied || isInvalidModel || isQuotaError) {
+    if (isAccessDenied || isInvalidModel || isQuotaError || isUnavailable) {
       if (isQuotaError) {
         console.log('[AI Generation] Rate-Limit erreicht (429). Warte 35 Sekunden vor Fallback...');
         await new Promise(resolve => setTimeout(resolve, 35000));
+      } else if (isUnavailable) {
+        console.log('[AI Generation] Modell überlastet (503). Warte 5 Sekunden vor Fallback...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
-      const directCandidates = ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'].filter(m => m !== targetModel);
+      const directCandidates = ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'].filter(m => m !== targetModel);
 
       for (const fallbackModel of directCandidates) {
         try {
