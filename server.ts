@@ -314,10 +314,7 @@ function getModelName(customModel?: string, customApiKey?: string, customBaseUrl
     }
     return "gemini-3.5-flash";
   } else {
-    if (!rawModel || rawModel === "Standard" || rawModel === "Pro" || rawModel === "Expert" || rawModel.startsWith('gemini-2.5') || rawModel.startsWith('gemini-1.5') || rawModel.startsWith('gemini-2.0')) {
-      return "gemini-3.7-flash";
-    }
-    return rawModel;
+    return "gemini-2.5-flash";
   }
 }
 
@@ -514,21 +511,36 @@ export async function generateAIContent(options: {
     });
   } catch (err: any) {
     console.warn("AI Generation Error for model:", targetModel, "Error:", err?.message || err);
-    const fullStr = (err?.message || '') + ' ' + JSON.stringify(err || {});
+    let fullStr = (err?.message || '') + ' ' + JSON.stringify(err || {});
     
-    // Check for access denied, invalid model name, quota exhausted, 503 unavailable, or 403 errors
+    // Check for access denied, invalid model name, quota exhausted, 503 unavailable, 404 not found, or 403 errors
     const isAccessDenied = fullStr.includes('key_model_access_denied') || fullStr.includes('not allowed to access model') || fullStr.includes('403') || fullStr.includes('Forbidden') || err?.status === 403 || err?.code === 403;
-    const isInvalidModel = fullStr.includes('Invalid model name passed in model=') || fullStr.includes('invalid model');
+    const isInvalidModel = fullStr.includes('Invalid model name passed in model=') || fullStr.includes('invalid model') || fullStr.includes('not found') || err?.status === 404;
     const isQuotaError = err?.status === 429 || err?.code === 429 || fullStr.includes('quota') || fullStr.includes('Quota') || fullStr.includes('RESOURCE_EXHAUSTED');
     const isUnavailable = err?.status === 503 || err?.code === 503 || fullStr.includes('503') || fullStr.includes('UNAVAILABLE') || fullStr.includes('high demand');
 
     if (isAccessDenied || isInvalidModel || isQuotaError || isUnavailable) {
       if (isQuotaError) {
-        console.log('[AI Generation] Rate-Limit erreicht (429). Warte 35 Sekunden vor Fallback...');
-        await new Promise(resolve => setTimeout(resolve, 35000));
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const retryMatch = fullStr.match(/retry in ([0-9.]+)s/i);
+          const waitSec = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) + 5 : 65;
+          console.log(`[AI Generation] Rate-Limit erreicht (429). Versuch ${attempt}/3: Warte ${waitSec} Sekunden...`);
+          await new Promise(resolve => setTimeout(resolve, waitSec * 1000));
+          try {
+            const retryAi = getGenAIClient(options.customApiKey, options.customBaseUrl);
+            return await retryAi.models.generateContent({
+              model: targetModel,
+              contents: options.contents,
+              ...(options.config ? { config: options.config } : {})
+            });
+          } catch (retryErr: any) {
+            fullStr = (retryErr?.message || '') + ' ' + JSON.stringify(retryErr || {});
+            console.warn(`[AI Generation] Retry ${attempt} fehlgeschlagen für ${targetModel}:`, retryErr?.message || retryErr);
+          }
+        }
       } else if (isUnavailable) {
-        console.log('[AI Generation] Modell überlastet (503). Warte 5 Sekunden vor Fallback...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        console.log('[AI Generation] Modell überlastet (503). Warte 10 Sekunden vor Fallback...');
+        await new Promise(resolve => setTimeout(resolve, 10000));
       }
       const directCandidates = ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'].filter(m => m !== targetModel);
 
@@ -1744,24 +1756,24 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
       /einarbeitung|onboarding|mitarbeiter|plan|september|welcome|joiner|schulung|training|squad|data|schwarz|dsv|vorbereitung|use\s*case|protokoll|transkript|transcript|meeting|notes|briefing|koenig|bauer|pk|lorenz|domcura|voest|alpine/i.test(f.name)
     );
 
-    // Sort by modifiedTime descending so freshest notes come first, limit to top 10 files to stay comfortably under the 250k token/min rate limit
+    // Ingest all relevant active notes without dropping projects
     eligibleFiles.sort((a, b) => {
       const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
       const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
       return timeB - timeA;
     });
 
-    const topFiles = eligibleFiles.slice(0, 10);
+    const topFiles = eligibleFiles.slice(0, 18);
 
     let contextData = "";
     for (const file of topFiles) {
       const content = await getFileContent(drive, file.id, file.mimeType);
       if (content && typeof content === 'string') {
-        const truncated = content.length > 2500 ? content.slice(0, 2500) + "\n...[Gekürzt wegen Länge]" : content;
+        const fullOrLargeContent = content.length > 3500 ? content.slice(0, 3500) + "\n...[Gekürzt bei 3.500 Zeichen]" : content;
         
         const modDateObj = file.modifiedTime ? new Date(file.modifiedTime) : null;
         const modDateStr = modDateObj ? modDateObj.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
-        const isOnboardingOrFuturePlan = /einarbeitung|onboarding|mitarbeiter|plan|september|schulung|welcome|new\s*joiner/i.test(file.path || file.name) || /einarbeitung|onboarding|september|neuer\s*mitarbeiter/i.test(truncated.slice(0, 500));
+        const isOnboardingOrFuturePlan = /einarbeitung|onboarding|mitarbeiter|plan|september|schulung|welcome|new\s*joiner/i.test(file.path || file.name) || /einarbeitung|onboarding|september|neuer\s*mitarbeiter/i.test(fullOrLargeContent.slice(0, 500));
         
         let ageNotice = '';
         if (isOnboardingOrFuturePlan) {
@@ -1793,7 +1805,7 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
           metadata: { name: file.name, path: file.path, mimeType: file.mimeType },
         }]);
 
-        contextData += `--- DOKUMENT / TRANSKRIPT / VORBEREITUNG: "${file.path || file.name}" | Direktlink: ${docUrl}${prepHighlight}${ageNotice} ---\n${truncated}\n\n`;
+        contextData += `--- DOKUMENT / TRANSKRIPT / VORBEREITUNG: "${file.path || file.name}" | Direktlink: ${docUrl}${prepHighlight}${ageNotice} ---\n${fullOrLargeContent}\n\n`;
       }
     }
     const localMem = loadLocalMemoryContext();
@@ -1811,8 +1823,8 @@ function extractCurrentSquadSignals(driveContext: string, chatsContext: string):
   const relevantBlocks = currentSourceBlocks.filter(block => /panda|mario|auslastung|kapazität|neue[nr]?\s+projekte|staffing|resource planner|billability|allocation/i.test(block));
   const chatLines = chatsContext.split(/\r?\n/).filter(line => /panda|mario|auslastung|kapazität|neue[nr]?\s+projekte|staffing|resource planner|billability|allocation/i.test(line));
   const signals = [
-    ...relevantBlocks.slice(0, 8).map(block => block.slice(0, 5000)),
-    chatLines.slice(0, 80).join('\n'),
+    ...relevantBlocks.slice(0, 5).map(block => block.slice(0, 3000)),
+    chatLines.slice(0, 50).join('\n'),
   ].filter(Boolean).join('\n\n');
   return signals || '(Keine aktuelle datierte Squad-Auslastungsquelle für Panda oder Mario gefunden.)';
 }
@@ -1824,12 +1836,12 @@ export function extractProjectCapacityEvidence(driveContext: string, emailsConte
   const sourceBlocks = driveBlocks
     .filter(block => !/(?:^|\s)(?:projects|customers|squad|general)\/[^\s"|]+\.md/i.test(block))
     .filter(block => evidencePattern.test(block))
-    .slice(0, 40)
-    .map(block => block.slice(0, 7000));
+    .slice(0, 20)
+    .map(block => block.slice(0, 3500));
   const messageLines = `${emailsContext}\n${chatsContext}`
     .split(/\r?\n/)
     .filter(line => evidencePattern.test(line))
-    .slice(0, 300);
+    .slice(0, 150);
   return [...sourceBlocks, messageLines.join('\n')].filter(Boolean).join('\n\n') || '(Keine projekt- oder kapazitätsbezogenen Quellen gefunden.)';
 }
 
