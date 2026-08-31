@@ -1756,20 +1756,21 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
       /einarbeitung|onboarding|mitarbeiter|plan|september|welcome|joiner|schulung|training|squad|data|schwarz|dsv|vorbereitung|use\s*case|protokoll|transkript|transcript|meeting|notes|briefing|koenig|bauer|pk|lorenz|domcura|voest|alpine/i.test(f.name)
     );
 
-    // Ingest all relevant active notes without dropping projects
+    // Ingest all relevant active notes without dropping projects.
+    // Filter out huge raw binary / data dump files and keep clean project context under 220k input tokens (~800k chars)
     eligibleFiles.sort((a, b) => {
       const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
       const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
       return timeB - timeA;
     });
 
-    const topFiles = eligibleFiles.slice(0, 18);
+    const topFiles = eligibleFiles.slice(0, 20);
 
     let contextData = "";
     for (const file of topFiles) {
       const content = await getFileContent(drive, file.id, file.mimeType);
       if (content && typeof content === 'string') {
-        const fullOrLargeContent = content.length > 3500 ? content.slice(0, 3500) + "\n...[Gekürzt bei 3.500 Zeichen]" : content;
+        const fullOrLargeContent = content.length > 2500 ? content.slice(0, 2500) + "\n...[Gekürzt bei 2.500 Zeichen]" : content;
         
         const modDateObj = file.modifiedTime ? new Date(file.modifiedTime) : null;
         const modDateStr = modDateObj ? modDateObj.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
@@ -1823,8 +1824,8 @@ function extractCurrentSquadSignals(driveContext: string, chatsContext: string):
   const relevantBlocks = currentSourceBlocks.filter(block => /panda|mario|auslastung|kapazität|neue[nr]?\s+projekte|staffing|resource planner|billability|allocation/i.test(block));
   const chatLines = chatsContext.split(/\r?\n/).filter(line => /panda|mario|auslastung|kapazität|neue[nr]?\s+projekte|staffing|resource planner|billability|allocation/i.test(line));
   const signals = [
-    ...relevantBlocks.slice(0, 5).map(block => block.slice(0, 3000)),
-    chatLines.slice(0, 50).join('\n'),
+    ...relevantBlocks.slice(0, 4).map(block => block.slice(0, 2000)),
+    chatLines.slice(0, 40).join('\n'),
   ].filter(Boolean).join('\n\n');
   return signals || '(Keine aktuelle datierte Squad-Auslastungsquelle für Panda oder Mario gefunden.)';
 }
@@ -1836,12 +1837,12 @@ export function extractProjectCapacityEvidence(driveContext: string, emailsConte
   const sourceBlocks = driveBlocks
     .filter(block => !/(?:^|\s)(?:projects|customers|squad|general)\/[^\s"|]+\.md/i.test(block))
     .filter(block => evidencePattern.test(block))
-    .slice(0, 20)
-    .map(block => block.slice(0, 3500));
+    .slice(0, 15)
+    .map(block => block.slice(0, 2500));
   const messageLines = `${emailsContext}\n${chatsContext}`
     .split(/\r?\n/)
     .filter(line => evidencePattern.test(line))
-    .slice(0, 150);
+    .slice(0, 100);
   return [...sourceBlocks, messageLines.join('\n')].filter(Boolean).join('\n\n') || '(Keine projekt- oder kapazitätsbezogenen Quellen gefunden.)';
 }
 
