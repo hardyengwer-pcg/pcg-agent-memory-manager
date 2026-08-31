@@ -29,6 +29,7 @@ import {
 import { searchVerbatimEvidence } from './verbatim-evidence-ledger.ts';
 import { queryTemporalTimeline, upsertTemporalFact } from './temporal-facts.ts';
 import { recordDecision, searchDecisions } from './decision-memory.ts';
+import { runMemoryMcpStdio } from './memory-mcp-server.ts';
 import { captureCurrentBrowserPage, compareBrowserPages } from './browser-mcp.ts';
 
 const ROOT = process.cwd();
@@ -778,6 +779,7 @@ PCG Agent CLI – Befehle:
   npm run agent -- fact-timeline ["Subject"] [--predicate "rel"] [--all]
   npm run agent -- decision-record --title "Titel" --decision "Beschluss" --rationale "Grund" [--project "P"] [--alts "A1,A2"] [--owner "O"] [--tags "t1,t2"]
   npm run agent -- decision-search ["Begriff"] [--project "P"] [--tag "t"] [--owner "O"]
+  npm run agent -- memory-mcp       Startet den MCP Server (Stdio) für Claude Code / Gemini CLI
 
 Chat-Rückkanal (Google Chat Bot):
   npm run agent -- chat-spaces         Chat-Räume auflisten (Raum-ID für .env)
@@ -814,6 +816,7 @@ async function main() {
       case 'fact-timeline': return await cmdFactTimeline(args.slice(1));
       case 'decision-record': return await cmdDecisionRecord(args.slice(1));
       case 'decision-search': return await cmdDecisionSearch(args.slice(1));
+      case 'memory-mcp': return await runMemoryMcpStdio();
       case 'chat-spaces': return await cmdChatSpaces();
       case 'chat-send': return await cmdChatSend(args.slice(1).join(' '));
       case 'chat-process': return await cmdChatProcess();

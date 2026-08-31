@@ -51,6 +51,9 @@ npm run agent -- fact-timeline ["Mario Pasculli"] [--all]
 # 3. Entscheidungsgedächtnis (Decision Memory)
 npm run agent -- decision-record -- --title "K&B Modellwahl" --decision "Gemini 2.5 Flash aktiv nutzen" --rationale "Kostenfaktor" --project "Koenig & Bauer" --alts "Gemini 3.7 Flash,Claude" --owner "Hardy Engwer" --tags "ai-model,kosten"
 npm run agent -- decision-search "Kostenfaktor" [--project "Koenig & Bauer"]
+
+# 4. MCP Server für externe Agenten (Claude Code / Gemini CLI)
+npm run agent -- memory-mcp
 ```
 
 ## Windows Task Scheduler
