@@ -524,7 +524,8 @@ async function cmdDaily() {
   if (process.env.CHAT_SPACE_ID) {
     try {
       const chat = google.chat({ version: 'v1', auth: getOAuth2Client(accessToken) });
-      const chunks = splitChatMessage(cleanContentForEmail(result.summary));
+      const todoSection = extractDailyTodoSection(result.summary);
+      const chunks = splitChatMessage(cleanContentForEmail(todoSection));
       for (const [index, chunk] of chunks.entries()) {
         await chat.spaces.messages.create({
           parent: getChatSpaceId(),
@@ -759,6 +760,11 @@ function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i >= 0 && i + 1 < args.length) return args[i + 1];
   return undefined;
+}
+
+function extractDailyTodoSection(summary: string): string {
+  const sectionMatch = summary.match(/## 6\.\s+[^\n]+[\s\S]*?(?=\n<ACTION_PROPOSALS>|$)/i);
+  return sectionMatch?.[0]?.trim() || '## Handlungsempfehlungen\n\nKeine aktuellen To-Dos gefunden.';
 }
 
 function printHelp() {
