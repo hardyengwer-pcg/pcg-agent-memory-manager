@@ -504,7 +504,7 @@ export async function generateAIContent(options: {
   // 2. Direct Google GenAI execution
   const ai = getGenAIClient(options.customApiKey, options.customBaseUrl);
   try {
-    return await ai.models.generateContent({
+    return await generateGeminiContentWithTimeout(ai, {
       model: targetModel,
       contents: options.contents,
       ...(options.config ? { config: options.config } : {})
@@ -518,36 +518,23 @@ export async function generateAIContent(options: {
     const isInvalidModel = fullStr.includes('Invalid model name passed in model=') || fullStr.includes('invalid model') || fullStr.includes('not found') || err?.status === 404;
     const isQuotaError = err?.status === 429 || err?.code === 429 || fullStr.includes('quota') || fullStr.includes('Quota') || fullStr.includes('RESOURCE_EXHAUSTED');
     const isUnavailable = err?.status === 503 || err?.code === 503 || fullStr.includes('503') || fullStr.includes('UNAVAILABLE') || fullStr.includes('high demand');
+    const isNetworkError = fullStr.includes('fetch failed') || fullStr.includes('ECONNRESET') || fullStr.includes('ETIMEDOUT') || fullStr.includes('timed out');
 
-    if (isAccessDenied || isInvalidModel || isQuotaError || isUnavailable) {
+    if (isAccessDenied || isInvalidModel || isQuotaError || isUnavailable || isNetworkError) {
       if (isQuotaError) {
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          const retryMatch = fullStr.match(/retry in ([0-9.]+)s/i);
-          const waitSec = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) + 5 : 65;
-          console.log(`[AI Generation] Rate-Limit erreicht (429). Versuch ${attempt}/3: Warte ${waitSec} Sekunden...`);
-          await new Promise(resolve => setTimeout(resolve, waitSec * 1000));
-          try {
-            const retryAi = getGenAIClient(options.customApiKey, options.customBaseUrl);
-            return await retryAi.models.generateContent({
-              model: targetModel,
-              contents: options.contents,
-              ...(options.config ? { config: options.config } : {})
-            });
-          } catch (retryErr: any) {
-            fullStr = (retryErr?.message || '') + ' ' + JSON.stringify(retryErr || {});
-            console.warn(`[AI Generation] Retry ${attempt} fehlgeschlagen für ${targetModel}:`, retryErr?.message || retryErr);
-          }
-        }
+        console.log(`[AI Generation] Quota für ${targetModel} erschöpft. Wechsle ohne Wartezeit zum Fallback-Modell.`);
       } else if (isUnavailable) {
         console.log('[AI Generation] Modell überlastet (503). Warte 10 Sekunden vor Fallback...');
         await new Promise(resolve => setTimeout(resolve, 10000));
+      } else if (isNetworkError) {
+        console.log(`[AI Generation] Netzwerkfehler für ${targetModel}. Wechsle zum Fallback-Modell.`);
       }
       const directCandidates = ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'].filter(m => m !== targetModel);
 
       for (const fallbackModel of directCandidates) {
         try {
           const fallbackAi = getGenAIClient(options.customApiKey, options.customBaseUrl);
-          const result = await fallbackAi.models.generateContent({
+          const result = await generateGeminiContentWithTimeout(fallbackAi, {
             model: fallbackModel,
             contents: options.contents,
             ...(options.config ? { config: options.config } : {})
@@ -566,6 +553,20 @@ export async function generateAIContent(options: {
       }
     }
     throw err;
+  }
+}
+
+async function generateGeminiContentWithTimeout(ai: any, request: any, timeoutMs = 60000): Promise<any> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      ai.models.generateContent(request),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Gemini request timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -1903,8 +1904,16 @@ export function validateDailyBriefingStructure(text: string): string {
     const repaired: string[] = [];
     let currentItem = false;
     let itemHasStatus = false;
+    let skipOrphanBlock = false;
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
+      if (skipOrphanBlock) {
+        if (/^-\s+\*\*/.test(line) || /^---/.test(line)) {
+          skipOrphanBlock = false;
+        } else {
+          continue;
+        }
+      }
       if (/^-\s+\*\*/.test(line)) {
         currentItem = true;
         itemHasStatus = false;
@@ -1918,6 +1927,8 @@ export function validateDailyBriefingStructure(text: string): string {
           currentItem = true;
         } else {
           console.warn('[Briefing Structure] Verwaister Projektstatus ohne ermittelbaren Projekttitel.');
+          skipOrphanBlock = true;
+          continue;
         }
       }
       if (/^\s*[•-]\s+\*\*Status:\*\*/.test(line)) itemHasStatus = true;
@@ -1985,7 +1996,7 @@ function extractGoogleTaskStates(tasksContext?: string): { open: string[]; compl
   return result;
 }
 
-function removeCompletedTaskRecommendations(text: string, completedTitles: string[]): string {
+function removeCompletedTaskRecommendations(text: string, completedTitles: string[], openTitles: string[] = []): string {
   if (completedTitles.length === 0) return text;
   const sectionStart = text.search(/^## 4\.\s/m);
   if (sectionStart < 0) return text;
@@ -1995,7 +2006,8 @@ function removeCompletedTaskRecommendations(text: string, completedTitles: strin
   const before = text.slice(0, sectionStart);
   const section = text.slice(sectionStart, sectionEnd).replace(
     /^- \*\*([^*\n]+)\*\*[\s\S]*?(?=^- \*\*|$)/gm,
-    (block, title) => completedTitles.some(completed => areTaskTextsSimilar(title, completed)) ? '' : block
+    (block, title) => completedTitles.some(completed => areTaskTextsSimilar(title, completed)) &&
+       !openTitles.some(open => areTaskTextsSimilar(title, open)) ? '' : block
   );
   return before + section + text.slice(sectionEnd);
 }
@@ -2033,7 +2045,7 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
   const taskStates = extractGoogleTaskStates(tasksContext);
   text = removeStaleNextStepsFromProjectStatus(text, taskStates.completed);
   if (!text.includes('<ACTION_PROPOSALS>')) {
-    text = removeCompletedTaskRecommendations(text, taskStates.completed);
+    text = removeCompletedTaskRecommendations(text, taskStates.completed, taskStates.open);
     text = convertMarkdownTablesToCleanText(text);
     text = text.replace(/###?\s*📅?\s*Datenbasis\s*&?\s*Zeiträume[\s\S]*?(?=(?:###?|\n\n[1-5]\.|\n\n[A-Z]))/gi, '').trim();
     text = text.replace(/-\s*\*\*Kalender:\*\*[\s\S]*?(?=\n\n|\n[1-5]\.)/gi, '').trim();
@@ -2041,7 +2053,7 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
   }
 
   const match = text.match(/<ACTION_PROPOSALS>([\s\S]*?)<\/ACTION_PROPOSALS>/);
-  if (!match) return removeCompletedTaskRecommendations(text, taskStates.completed);
+  if (!match) return removeCompletedTaskRecommendations(text, taskStates.completed, taskStates.open);
 
   const todayISO = new Date().toISOString().split('T')[0];
 
@@ -2157,7 +2169,7 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
     console.warn("Could not parse/sanitize action proposals JSON:", e);
   }
 
-  text = removeCompletedTaskRecommendations(text, taskStates.completed);
+  text = removeCompletedTaskRecommendations(text, taskStates.completed, taskStates.open);
 
   // 5. Convert any markdown tables to clean bullet and paragraph formatting
   text = convertMarkdownTablesToCleanText(text);
@@ -3186,15 +3198,19 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
   ));
 
   try {
-    const generatedMemoryFiles = await generateStructuredMemoryConcepts({
-      driveContext,
-      emailsContext,
-      eventsContext,
-      chatsContext,
-      tasksContext,
-      localMemoryContext,
-    });
-    console.log(`[Memory Curation] ${generatedMemoryFiles.length} OKF-Konzept(e) aktualisiert.`);
+    if (process.env.ENABLE_DAILY_MEMORY_CURATION === 'true') {
+      const generatedMemoryFiles = await generateStructuredMemoryConcepts({
+        driveContext,
+        emailsContext,
+        eventsContext,
+        chatsContext,
+        tasksContext,
+        localMemoryContext,
+      });
+      console.log(`[Memory Curation] ${generatedMemoryFiles.length} OKF-Konzept(e) aktualisiert.`);
+    } else {
+      console.log('[Memory Curation] Im Daily standardmäßig übersprungen; Memory-Sync bleibt aktiv.');
+    }
     const syncedMemoryFiles = await syncLocalMemoryToDrive(accessToken);
     console.log(`[Memory Sync] ${syncedMemoryFiles.length} strukturierte Datei(en) nach Drive synchronisiert.`);
   } catch (memoryErr: any) {
@@ -3206,16 +3222,25 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     const proposalsMatch = summary.match(/<ACTION_PROPOSALS>([\s\S]*?)<\/ACTION_PROPOSALS>/i);
     if (proposalsMatch) {
       try {
+        // Re-read Tasks after generation so manually-created or concurrently-created
+        // tasks cannot slip through the earlier snapshot-based sanitization.
+        const latestTaskStates = extractGoogleTaskStates(await fetchTasks(oauth2Client));
+        const createdTitles: string[] = [];
         let jsonStr = proposalsMatch[1].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim().replace(/,\s*([\]}])/g, '$1');
         const proposals = JSON.parse(jsonStr);
         const taskProposals = Array.isArray(proposals) ? proposals.filter((p: any) => p && p.type === 'task') : [];
         for (const tp of taskProposals) {
           try {
             const title = tp.details?.title || tp.title;
+            if (latestTaskStates.open.some(open => areTaskTextsSimilar(title, open)) || createdTitles.some(created => areTaskTextsSimilar(title, created))) {
+              console.log(`[Final Task Deduplication] Skipped existing or duplicate proposal: "${title}"`);
+              continue;
+            }
             const notes = tp.details?.notes || '';
             const dueDate = tp.details?.dueDate;
             const r = await createGoogleTaskDirect(title, notes, dueDate, accessToken);
             createdTasks.push({ title, id: r.id });
+            createdTitles.push(title);
             console.log(`Google Task angelegt: ${title} (ID: ${r.id})`);
           } catch (taskErr: any) {
             const title = tp.details?.title || tp.title || 'Unbekannt';

@@ -142,6 +142,22 @@ test('removes completed task from recommendations and proposals', () => {
   assert.match(result, /Neuen Punkt pruefen/);
 });
 
+test('keeps an open task when a matching historical task is completed', () => {
+  const mixedTaskStates = `Google Tasks – AUTORITATIVE AUFGABENZUSTÄNDE:
+OFFEN:
+- [OFFEN] Freenet TV: Jira-Hierarchie für Odoo Task 4257 anlegen | Liste: My Tasks
+ERLEDIGT:
+- [ERLEDIGT] Jira-Hierarchie für Freenet TV Buchung anlegen | Liste: My Tasks`;
+  const text = `## 4. Handlungsempfehlungen
+- **Jira-Hierarchie für Freenet TV Buchung anlegen** — Fälligkeit: heute
+  • **Details:** Odoo Task 4257 in Jira verknüpfen.
+  • [Quelle: Google Tasks](https://tasks.google.com/)`;
+
+  const result = sanitizeActionProposals(text, mixedTaskStates, '');
+
+  assert.match(result, /Jira-Hierarchie für Freenet TV Buchung anlegen/);
+});
+
 test('does not create a duplicate for an open task', () => {
   const text = `<ACTION_PROPOSALS>
 [
