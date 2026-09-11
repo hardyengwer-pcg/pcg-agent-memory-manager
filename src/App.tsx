@@ -50,7 +50,7 @@ export default function App() {
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [apiKeyInvalidFormat, setApiKeyInvalidFormat] = useState(false);
   const [apiKeyMasked, setApiKeyMasked] = useState('');
-  const [selectedModel, setSelectedModel] = useState('gemini-3.5-flash');
+  const [selectedModel, setSelectedModel] = useState('gemini-3.8-flash');
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingSettings, setIsTestingSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -962,12 +962,12 @@ export default function App() {
                     <span className="text-[11px] text-gray-400 font-medium block">Empfohlene Modelle für den Memory Manager:</span>
                     <div className="grid grid-cols-2 gap-1.5">
                       {[
-                        { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', desc: 'PCG Gateway Top-Speed & Qualität (Empfohlen)' },
+                        { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', desc: 'Google Gemini & Gateway (Top-Empfehlung)' },
+                        { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', desc: 'Google Gemini Direkt-API' },
+                        { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', desc: 'PCG Gateway Top-Speed & Qualität' },
                         { id: 'pcg-auto-pro', label: 'PCG Auto Pro', desc: 'Smarte Gateway Auto-Route' },
-                        { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Tiefes Reasoning & Context' },
                         { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', desc: 'Gateway Anthropic Modell' },
                         { id: 'gpt-5.4', label: 'GPT 5.4', desc: 'Gateway OpenAI Modell' },
-                        { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', desc: 'Google Gemini Direkt-API' },
                       ].map((m) => (
                         <button
                           key={m.id}

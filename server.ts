@@ -309,12 +309,15 @@ function getModelName(customModel?: string, customApiKey?: string, customBaseUrl
     : (settings.model && settings.model.trim() !== '' ? settings.model.trim() : '');
 
   if (isGateway) {
-    if (rawModel && (rawModel === 'gemini-3.5-flash' || rawModel === 'gemini-3.7-flash' || rawModel === 'pcg-auto-pro' || rawModel === 'gemini-2.5-pro' || rawModel === 'claude-sonnet-5' || rawModel === 'gpt-5.4' || rawModel === 'Standard' || rawModel === 'Pro' || rawModel === 'Expert')) {
+    if (rawModel && (rawModel === 'gemini-3.8-flash' || rawModel === 'gemini-3.5-flash' || rawModel === 'gemini-3.7-flash' || rawModel === 'pcg-auto-pro' || rawModel === 'gemini-2.5-pro' || rawModel === 'claude-sonnet-5' || rawModel === 'gpt-5.4' || rawModel === 'Standard' || rawModel === 'Pro' || rawModel === 'Expert')) {
       return rawModel;
     }
-    return "gemini-3.5-flash";
+    return "gemini-3.8-flash";
   } else {
-    return "gemini-2.5-flash";
+    if (rawModel && (rawModel.startsWith('gemini-') || rawModel === 'Standard' || rawModel === 'Pro')) {
+      return rawModel;
+    }
+    return "gemini-3.8-flash";
   }
 }
 
@@ -463,6 +466,7 @@ export async function generateAIContent(options: {
     const gatewayCandidates = [
       targetModel,
       'Standard',
+      'gemini-3.8-flash',
       'Pro',
       'Expert',
       'gemini-3.5-flash',
@@ -529,7 +533,7 @@ export async function generateAIContent(options: {
       } else if (isNetworkError) {
         console.log(`[AI Generation] Netzwerkfehler für ${targetModel}. Wechsle zum Fallback-Modell.`);
       }
-      const directCandidates = ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'].filter(m => m !== targetModel);
+      const directCandidates = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'].filter(m => m !== targetModel);
 
       for (const fallbackModel of directCandidates) {
         try {
@@ -601,7 +605,7 @@ export function formatAIError(error: any, customModel?: string, customApiKey?: s
   if (fullStr.includes('Invalid model name passed in model=')) {
     return {
       status: 400,
-      message: `Ungültiger KI-Modellname ('${currentModel}'). Bitte klicke oben rechts auf 'AI Gateway' und wähle ein gültiges Modell wie z. B. 'Standard', 'Pro' oder 'gemini-2.5-flash'.`
+      message: `Ungültiger KI-Modellname ('${currentModel}'). Bitte klicke oben rechts auf 'AI Gateway' und wähle ein gültiges Modell wie z. B. 'Standard', 'Pro' oder 'gemini-3.8-flash'.`
     };
   }
 
@@ -610,7 +614,7 @@ export function formatAIError(error: any, customModel?: string, customApiKey?: s
     fullStr.includes('not allowed to access model')
   ) {
     const match = fullStr.match(/models=\[([^\]]+)\]/);
-    const allowed = match ? match[1] : "'Standard', 'Pro', 'Expert', 'gemini-2.5-flash'";
+    const allowed = match ? match[1] : "'Standard', 'Pro', 'Expert', 'gemini-3.8-flash'";
     return {
       status: 403,
       message: `Zugriff auf Modell '${currentModel}' verweigert (HTTP 403). Dieser API-Key / Gateway erlaubt nur bestimmte Modelle: [${allowed}]. Bitte wähle unter 'AI Gateway' (oben rechts) ein passendes KI-Modell aus.`
