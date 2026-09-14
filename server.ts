@@ -1952,6 +1952,10 @@ function applyCanonicalSpellingCorrections(text: string): string {
   corrected = corrected.replace(/\bDomKura\b/g, 'domcura');
   corrected = corrected.replace(/\bFirst\s*Alpina\b/gi, 'VOEST Alpine');
   corrected = corrected.replace(/\bFirst\s*Alpine\b/gi, 'VOEST Alpine');
+  corrected = corrected.replace(
+    /-\s+\*\*Kantonsspital\s+Graub[üu]nden\*\*\s*(\r?\n\s*[•-]\s+\*\*Status:\*\*[\s\S]*?(?:Avantgarde|Patrik M[öo]ller))/gi,
+    '- **Avantgarde**$1'
+  );
   return corrected;
 }
 
