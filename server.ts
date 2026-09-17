@@ -1884,9 +1884,10 @@ export function validateDailyBriefingStructure(text: string): string {
     '## 1. [ÄNDERUNG] Projekt- und Kapazitätsänderungen',
     '## 2. Squad Lead Control',
     '## 3. 🚨 Proaktive Kunden- & Meeting-Vorbereitung',
-    '## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte',
-    '## 5. 🔮 Vorausschau & Wochenausblick',
-    '## 6. 💡 Konkrete nächste Schritte & Handlungsempfehlungen',
+    '## 4. 🔮 Vorausschau & Wochenausblick',
+    '## 5. 🚨 Dringende Klärungen & Projekt-To-dos',
+    '## 6. 💡 Weitere nächste Schritte',
+    '## 7. 📋 Kompakte Projektstatusübersicht',
   ];
   const missing = expectedSections.filter(section => !text.includes(section));
   if (missing.length > 0) {
@@ -1899,8 +1900,8 @@ export function validateDailyBriefingStructure(text: string): string {
     ? `${text.slice(0, titleEnd + 1)}\n${text.slice(firstSectionIndex)}`
     : text;
 
-  const statusSectionStart = normalized.indexOf('## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte');
-  const statusSectionEnd = normalized.indexOf('\n## 5. ', statusSectionStart);
+  const statusSectionStart = normalized.indexOf('## 7. 📋 Kompakte Projektstatusübersicht');
+  const statusSectionEnd = normalized.indexOf('\n<ACTION_PROPOSALS>', statusSectionStart);
   if (statusSectionStart >= 0) {
     const end = statusSectionEnd >= 0 ? statusSectionEnd : normalized.length;
     const section = normalized.slice(statusSectionStart, end);
@@ -2881,7 +2882,7 @@ WICHTIGE FOKUS- & BRIEFING-REGELN:
    - Jede einzelne Information, jedes Projektupdate, jede Vorbereitungsnotiz und jedes To-Do MUSS am Ende des jeweiligen Punkts mit einer genauen, ANKLICKBAREN Quellenangabe als Markdown-Link belegt werden (nutze die URLs aus "Direktlink:" im Kontext)!
    - Beispiele: \`[Quelle: Google Drive – "Transkript PK Montag"](https://...)\`, \`[Quelle: Google Chat – "Raum DATA Squad"](https://...)\`, \`[Quelle: Gmail – Betreff "...", 18.08.](https://...)\`, \`[Quelle: Google Kalender – "1:1 Marion"](https://...)\`, \`[Quelle: Google Tasks – Liste "Meine Aufgaben"](https://tasks.google.com/)\`.
 
- 13. 📐 EINHEITLICHES AUSGABEFORMAT (6 ABSCHNITTE, DETERMINISTISCH & OHNE TABELLEN):
+  13. 📐 EINHEITLICHES AUSGABEFORMAT (7 ABSCHNITTE, DETERMINISTISCH & OHNE TABELLEN):
     - Wenn ein Daily Briefing, Sync, Status-Bericht oder Lagebild angefragt wird, folge IMMER exakt dieser Reihenfolge. Keine Executive Summary vor Abschnitt 1:
       # ☀️ Tägliches Management-Update (<Datum>)
       ---
@@ -2902,24 +2903,27 @@ WICHTIGE FOKUS- & BRIEFING-REGELN:
         • **Vorbereitungs-Status & To-Dos:** <Was ist vorbereitet / was zu tun>
         • [Quelle: <Name>](<URL>)
       ---
-      ## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte
-      - **<Projektname>** (z. B. Schwarz / DSV, Koenig & Bauer, domcura, VOEST Alpine, Lorenz, Squad / Team)
-        • **Status:** <🟢 On Track / 🟡 In Klärung / 🟠 Wartend auf Input>
-        • **Aktueller Stand:** <Präziser Kontext>
-        • **Wartezustand & Nächste Schritte:** <Konkrete Aufgaben>
-        • Nur Informationen, die nicht bereits in Abschnitt 1 oder 2 stehen.
-        • [Quelle: <Name>](<URL>)
-      ---
-      ## 5. 🔮 Vorausschau & Wochenausblick (Nächste Tage / Montag)
-      - **<Fokusbereich / Tag>**
-        • **Anstehend:** <Fristen / Termine / Vorbereitungsbedarf>
-        • [Quelle: <Name>](<URL>)
-      ---
-      ## 6. 💡 Konkrete nächste Schritte & Handlungsempfehlungen
-      - **<Handlung / To-Do>** — Fälligkeit: <Datum>
-        • **Details:** <Wer, was, warum>
-        • [Quelle: <Name>](<URL>)
-    - Vermeide Dopplungen: Änderungen gehören ausschließlich in Abschnitt 1, Squad-/Kapazitätskontrollen ausschließlich in Abschnitt 2. In späteren Abschnitten nur auf diese Punkte verweisen.
+       ## 4. 🔮 Vorausschau & Wochenausblick (Nächste Tage / Montag)
+       - **<Fokusbereich / Tag>**
+         • **Anstehend:** <Fristen / Termine / Vorbereitungsbedarf>
+         • [Quelle: <Name>](<URL>)
+       ---
+       ## 5. 🚨 Dringende Klärungen & Projekt-To-dos
+       - **<Blocker / Entscheidung / Projektaktion>** — Fälligkeit: <Datum>
+         • **Details:** <Owner, konkrete nächste Aktion und Auswirkung>
+         • **Priorität:** <Hoch / Mittel>
+         • [Quelle: <Name>](<URL>)
+       ---
+       ## 6. 💡 Weitere nächste Schritte
+       - **<Handlung / To-Do>** — Fälligkeit: <Datum>
+         • **Details:** <Wer, was, warum>
+         • [Quelle: <Name>](<URL>)
+       ---
+       ## 7. 📋 Kompakte Projektstatusübersicht (optional)
+       - Nur eine Zeile pro aktivem Projekt; keine Details oder To-dos wiederholen.
+       - Neue Projekte aus aktuellen Quellen aufnehmen, auch ohne lokale Memory-Datei (z. B. Avantgarde).
+       - [Quelle: <Name>](<URL>)
+     - Vermeide Dopplungen: Änderungen gehören ausschließlich in Abschnitt 1, Squad-/Kapazitätskontrollen ausschließlich in Abschnitt 2, dringende Projektklärungen in Abschnitt 5 und sonstige To-dos in Abschnitt 6. Abschnitt 7 bleibt kompakt.
 
 14. 🛡️ MANDATORISCHE SELBSTKONTROLLE (SELF-AUDIT VOR DER AUSGABE):
    - Führe vor der Ausgabe eine interne Selbstkontrolle durch:
@@ -3077,7 +3081,7 @@ ${skillContext}
 - ANKLICKBARE QUELLEN-LINKS: Jede Information und jedes To-Do MUSS am Ende mit einer anklickbaren Quellenangabe als Markdown-Link belegt werden (z. B. [Quelle: Google Drive – "Transkript PK Montag"](https://...), [Quelle: Gmail – Betreff "...", Datum](https://...), [Quelle: Google Kalender – "1:1 Marion"](https://...)). Nutze stets die Direktlinks aus den Quellen-Abschnitten!
 - KEINE IGNORIERTEN TERMINE IM BERICHT: Erstelle NIEMALS einen Abschnitt oder Punkt wie "Ignorierte interne Termine". "Thursdays for Data" wird komplett stillschweigend ignoriert.
 
- FESTE 6-TEILIGE BRIEFING-STRUKTUR OHNE DOPPLUNGEN:
+ FESTE 7-TEILIGE BRIEFING-STRUKTUR OHNE DOPPLUNGEN:
 
  # ☀️ Tägliches Management-Update (${nowStr})
 
@@ -3107,31 +3111,27 @@ ${skillContext}
 
 ---
 
- ## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte
-- **<Projektname>** (z. B. Schwarz / DSV, Koenig & Bauer, domcura, VOEST Alpine, Lorenz, Squad / Team)
-  • **Status:** <🟢 On Track / 🟡 In Klärung / 🟠 Wartend auf Input>
-  • **Aktueller Stand:** <Präziser Kontext aus Drive, Mails, Chats>
- • **Wartezustand & Nächste Schritte:** <Konkrete Aufgaben / Wer wartet auf wen>
-  • Wiederhole keine Inhalte aus Abschnitt 1 oder 2; verweise stattdessen kurz darauf.
-  • [Quelle: <Name>](<URL>)
-
-Wenn Resource-Planner- oder Booking-Check-Daten in den Quellen vorhanden sind, füge danach den Unterabschnitt \`Squad Lead Control\` ein. Prüfe darin Allocation (mindestens 80% produktiv/billable und 100% geplant), aktuelle/erwartete Billability, Projektplanungs-Lücken sowie Booking Check / Odoo-Hibob-Deltas. Wenn diese Daten fehlen, nenne die fehlende Quelle ausdrücklich und behaupte keinen Status.
-
-Füge danach den Unterabschnitt \`Projekt- und Kapazitätsänderungen\` ein. Berücksichtige dort alle relevanten Quellen-Audit-Treffer, fasse materielle Änderungen mit dem Präfix \`[ÄNDERUNG]\` zusammen und verlinke jede Änderung mit der konkreten Quelle.
-
----
-
- ## 5. 🔮 Vorausschau & Wochenausblick (Nächste Tage / Montag)
+  ## 4. 🔮 Vorausschau & Wochenausblick (Nächste Tage / Montag)
 - **<Fokusbereich / Wochentag>**
   • **Anstehende Fristen & Termine:** <Was steht an>
   • **Vorbereitungsbedarf vorab:** <Was muss heute/vorab vorbereitet werden>
   • [Quelle: <Name>](<URL>)
 
----
+  ## 5. 🚨 Dringende Klärungen & Projekt-To-dos
+- **<Blocker / Entscheidung / Projektaktion>** — Fälligkeit: <Datum>
+  • **Details:** <Owner, konkrete nächste Aktion und Auswirkung>
+  • **Priorität:** <Hoch / Mittel>
+  • [Quelle: <Name>](<URL>)
 
- ## 6. 💡 Konkrete nächste Schritte & Handlungsempfehlungen
+  ## 6. 💡 Weitere nächste Schritte
 - **<Handlungsempfehlung>** — Fälligkeit: <Datum>
   • **Details:** <Wer, was, warum>
+  • [Quelle: <Name>](<URL>)
+
+  ## 7. 📋 Kompakte Projektstatusübersicht (optional)
+- Nur für seltene Orientierung verwenden; pro aktivem Projekt maximal eine Zeile.
+- Keine Details, Meetings, Kapazitätsdaten oder To-dos wiederholen; dafür auf Abschnitt 1–6 verweisen.
+- Neue Projekte aus aktuellen Quellen aufnehmen, auch ohne lokale Memory-Datei (z. B. Avantgarde).
   • [Quelle: <Name>](<URL>)
 
 --- GOOGLE DRIVE (MEETING NOTES & DOKUMENTE) ---
@@ -3173,12 +3173,13 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
 2a. KEINE EXECUTIVE SUMMARY VOR ABSCHNITT 1: Nach dem Titel beginnt das Briefing unmittelbar mit den Projekt- und Kapazitätsänderungen.
 3. MANDATORISCHE AKTUALITÄTSPRÜFUNG: Überprüfe jedes Thema vor der Anzeige auf Aktualität. Wenn eine E-Mail, Notiz oder Aufgabe länger als 7-14 Tage zurückliegt und kein anstehender Termin oder offener Task vorliegt, ist das Thema inaktiv und wird NICHT mehr angezeigt.
    Konfliktpriorität: neueste explizite Nutzerkorrektur im lokalen Memory > Google-Tasks-Status > neueste datierte Mail/Chat/Meeting-Notiz > ältere Quelle. [ERLEDIGT] darf nie aus alten Quellen reaktiviert werden; [OFFEN] bleibt aktiv.
-4. Universelle Analyse von Transkripten & Projekt-Zuweisungen: Analysiere Transkripte und Mitschriften aus E-Mails, Drive und Besprechungen lückenlos und leite konkrete To-Dos für jede Hardy zugewiesene Aufgabe, Zusage oder Projektverantwortung ab.
+  4. Universelle Analyse von Transkripten & Projekt-Zuweisungen: Analysiere Transkripte und Mitschriften aus E-Mails, Drive und Besprechungen lückenlos und leite konkrete To-Dos für jede Hardy zugewiesene Aufgabe, Zusage oder Projektverantwortung ab. Eine aktuelle Mail oder Chat-Nachricht mit Projektübernahme, neuer PM-Verantwortung, neuem Kundenkontext oder neuem Delivery-Stream erzeugt ein eigenständiges Projekt, auch ohne lokale Memory-Datei. Beispiel: Avantgarde ist nicht KSGR.
 5. End-to-End Pipeline-, Scoping- & SoW-Tracking: Erfasse Use Cases, Leistungsanforderungen und Deliverables aus Kunden-, Partner- und Vertriebs-Gesprächen. Tracke Wartezustände (z. B. Warten auf Use Cases/Input, anschließende SoW-Generierung) und schlage dafür proaktiv Nachfass- & Entwurfs-To-Dos vor.
 6. Proaktive Meeting-Vorbereitung (spätestens 1 Tag vorher): Bereite Hardy auf Kunden- und Use-Case-Meetings (wie Schwarz / DSV) für heute, morgen und Montag basierend auf vorhandenen Notizen und eingetragenen Vorbereitungen vor.
 7. Vorausschau: Schaue vorausschauend auf Montag und die nächste Woche.
 8. Vollständigkeit: Gehe lückenlos alle aktiven, unerledigten Themen durch und synchronisiere sie mit den neuesten Quellen.
-8a. DOPPLUNGSVERBOT: Änderungen ausschließlich in Abschnitt 1, Squad-Lead-Kontrollen ausschließlich in Abschnitt 2. Projektstatus, Meetings und nächste Schritte dürfen diese Inhalte nicht vollständig wiederholen, sondern nur kurz darauf verweisen.
+  8a. DOPPLUNGSVERBOT: Änderungen ausschließlich in Abschnitt 1, Squad-Lead-Kontrollen ausschließlich in Abschnitt 2, dringende Projektklärungen ausschließlich in Abschnitt 5 und weitere To-dos ausschließlich in Abschnitt 6. Meetings nennen nur Agenda und Vorbereitung. Abschnitt 7 enthält je Projekt nur eine kompakte Statuszeile ohne Wiederholung.
+  8b. PRIORITÄT: Dringende Blocker, Entscheidungen, fällige Projektaktionen und konkrete nächste Schritte stehen vor der optionalen Projektstatusübersicht. Die Statusübersicht darf nie zulasten dieser Hinweise ausführlich werden.
 9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
 10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden.
 10. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!

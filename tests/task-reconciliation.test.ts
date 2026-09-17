@@ -117,7 +117,7 @@ test('preserves project and capacity evidence for the source audit', () => {
 });
 
 test('repairs an orphaned project status from its source link', () => {
-  const result = validateDailyBriefingStructure(`# ☀️ Tägliches Management-Update\n\n## 1. [ÄNDERUNG] Projekt- und Kapazitätsänderungen\n\n## 2. Squad Lead Control\n\n## 3. 🚨 Proaktive Kunden- & Meeting-Vorbereitung\n\n## 4. 📋 Lückenloser Status aller aktiven Kunden & Projekte\n\n- **VOEST Alpine**\n  • **Status:** On Track\n\n  • **Status:** In Klärung\n  • [Quelle: Google Drive – "projects/lorenz-snack-world.md"](https://example.test/lorenz)\n\n## 5. 🔮 Vorausschau & Wochenausblick\n\n## 6. 💡 Konkrete nächste Schritte & Handlungsempfehlungen`);
+  const result = validateDailyBriefingStructure(`# ☀️ Tägliches Management-Update\n\n## 1. [ÄNDERUNG] Projekt- und Kapazitätsänderungen\n\n## 2. Squad Lead Control\n\n## 3. 🚨 Proaktive Kunden- & Meeting-Vorbereitung\n\n## 4. 🔮 Vorausschau & Wochenausblick\n\n## 5. 🚨 Dringende Klärungen & Projekt-To-dos\n\n## 6. 💡 Weitere nächste Schritte\n\n## 7. 📋 Kompakte Projektstatusübersicht\n\n- **VOEST Alpine**\n  • **Status:** On Track\n\n  • **Status:** In Klärung\n  • [Quelle: Google Drive – "projects/lorenz-snack-world.md"](https://example.test/lorenz)`);
 
   assert.match(result, /- \*\*Lorenz Snack World\*\*\n  • \*\*Status:\*\* In Klärung/);
 });
