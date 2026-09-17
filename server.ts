@@ -790,17 +790,18 @@ export async function fetchRecentEmails(auth: any) {
             });
             const headers = mRes.data.payload?.headers;
             const labelIds = mRes.data.labelIds || [];
-            const subject = headers?.find(h => h.name === 'Subject')?.value || '(Kein Betreff)';
-            const from = headers?.find(h => h.name === 'From')?.value || 'Unbekannt';
+             const subject = headers?.find(h => h.name === 'Subject')?.value || '(Kein Betreff)';
+             const from = headers?.find(h => h.name === 'From')?.value || 'Unbekannt';
+             const to = headers?.find(h => h.name === 'To')?.value || '';
             const date = headers?.find(h => h.name === 'Date')?.value || '';
             const snippet = mRes.data.snippet || '';
             const internalDate = Number(mRes.data.internalDate) || (date ? new Date(date).getTime() : 0);
 
             if (labelIds.includes('TRASH') || labelIds.includes('SPAM')) return null;
 
-            let statusStr = "Posteingang (Aktiv)";
-            if (!labelIds.includes('INBOX')) {
-              statusStr = "ARCHIVIERT";
+             let statusStr = labelIds.includes('SENT') ? "GESENDET" : "Posteingang (Aktiv)";
+             if (!labelIds.includes('INBOX')) {
+               statusStr = labelIds.includes('SENT') ? "GESENDET" : "ARCHIVIERT";
             }
 
             // Extract body text & attachments
@@ -854,8 +855,9 @@ export async function fetchRecentEmails(auth: any) {
             return {
               id: msgId,
               internalDate,
-              statusStr,
-              from,
+               statusStr,
+               from,
+               to,
               subject,
               date,
               bodySnippet,
@@ -917,7 +919,10 @@ export async function fetchRecentEmails(auth: any) {
         ageFlag = ` [Älterer Thread (${daysOld} Tage alt) - Aktualität vor Erwähnung gegenprüfen]`;
       }
 
-      emailsContext += `- [Status: ${em.statusStr}]${flagInfo}${ageFlag} Von: ${em.from} | Betreff: ${em.subject} | Datum: ${em.date} | Direktlink: ${mailUrl}${attachInfo}\n  Inhalt / Text: "${em.bodySnippet}"\n`;
+       const directionInfo = em.statusStr === 'GESENDET'
+         ? ` | Empfänger: ${em.to || 'unbekannt'} | AUSGANG: Für offene Antworten Follow-up prüfen`
+         : '';
+       emailsContext += `- [Status: ${em.statusStr}]${flagInfo}${ageFlag} Von: ${em.from}${directionInfo} | Betreff: ${em.subject} | Datum: ${em.date} | Direktlink: ${mailUrl}${attachInfo}\n  Inhalt / Text: "${em.bodySnippet}"\n`;
     }
     return emailsContext;
   } catch (e: any) {
@@ -3181,7 +3186,8 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
 8. Vollständigkeit: Gehe lückenlos alle aktiven, unerledigten Themen durch und synchronisiere sie mit den neuesten Quellen.
   8a. DOPPLUNGSVERBOT: Änderungen ausschließlich in Abschnitt 1, Squad-Lead-Kontrollen ausschließlich in Abschnitt 2, dringende Projektklärungen ausschließlich in Abschnitt 5 und weitere To-dos ausschließlich in Abschnitt 6. Meetings nennen nur Agenda und Vorbereitung. Abschnitt 7 enthält je Projekt nur eine kompakte Statuszeile ohne Wiederholung.
   8b. PRIORITÄT: Dringende Blocker, Entscheidungen, fällige Projektaktionen und konkrete nächste Schritte stehen vor der optionalen Projektstatusübersicht. Die Statusübersicht darf nie zulasten dieser Hinweise ausführlich werden.
-  8c. TODO-SYNCHRONISATION: Jede konkrete Aktion in Abschnitt 5 oder 6 muss als task in ACTION_PROPOSALS gespiegelt werden. Jede solche task-Aktion braucht ein sinnvolles dueDate im Format YYYY-MM-DD; offene Projektaktionen ohne Enddatum sind nicht zulässig.
+ 8c. TODO-SYNCHRONISATION: Jede konkrete Aktion in Abschnitt 5 oder 6 muss als task in ACTION_PROPOSALS gespiegelt werden. Jede solche task-Aktion braucht ein sinnvolles dueDate im Format YYYY-MM-DD; offene Projektaktionen ohne Enddatum sind nicht zulässig.
+  8d. E-MAIL-AUSGANG & FOLLOW-UP: Prüfe im E-Mail-Kontext ausdrücklich Nachrichten mit Status GESENDET. Wenn Hardy eine relevante Projekt-, Schätzungs-, Scope- oder Übergabemail gesendet hat und noch keine Antwort vorliegt, erstelle ein Nachhaken als Task mit Empfänger, Betreff, ursprünglichem Anliegen und gewünschter Antwort. Bei einer Abwesenheitsmeldung richte das dueDate auf den ersten oder zweiten Arbeitstag nach dem genannten Rückkehrdatum; ohne Rückkehrdatum auf 7–10 Tage nach Versand. Keine Follow-up-Aufgabe erzeugen, wenn bereits eine Antwort vorliegt oder ein gleichwertiger offener Google Task existiert.
 9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
 10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden.
 10. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!
