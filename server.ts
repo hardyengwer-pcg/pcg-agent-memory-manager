@@ -1238,6 +1238,45 @@ async function getFileContent(drive: any, fileId: string, mimeType: string) {
   }
 }
 
+function enrichTimestampTranscriptLinks(driveContext: string, eventsContext: string): string {
+  const eventPattern = /- .*?([^\n(]+)\(([^)]+) bis ([^)]+)\).*?Direktlink:\s*(https?:\/\/[^\s|]+)/g;
+  const events: { summary: string; end: number; url: string }[] = [];
+  for (const match of eventsContext.matchAll(eventPattern)) {
+    const end = Date.parse(match[3]);
+    if (!Number.isNaN(end)) events.push({ summary: match[1].trim(), end, url: match[4] });
+  }
+
+  return driveContext.replace(
+    /--- DOKUMENT \/ TRANSKRIPT \/ VORBEREITUNG: "([^"]*Transkript_[^"\s]+)"[^\n]*---([\s\S]*?)(?=\n--- DOKUMENT \/ TRANSKRIPT \/ VORBEREITUNG:|$)/gi,
+    (block, name, body) => {
+      const timestamp = name.match(/Transkript_(\d{4}-\d{2}-\d{2})[_-](\d{2})[-:](\d{2})/i);
+      if (!timestamp || events.length === 0) {
+        return `${block}\n[TRANSKRIPT-ZUORDNUNG: ungeklärt – kein passender Kalenderzeitpunkt ermittelbar]`;
+      }
+
+      const transcriptTime = Date.parse(`${timestamp[1]}T${timestamp[2]}:${timestamp[3]}:00`);
+      const transcriptText = body.slice(0, 1800).toLowerCase();
+      const candidates = events
+        .map(event => {
+          const minutesAfterEnd = (transcriptTime - event.end) / 60000;
+          const words = event.summary.toLowerCase().split(/[^a-z0-9äöüß]+/).filter(word => word.length >= 4);
+          const overlap = words.filter(word => transcriptText.includes(word)).length;
+          return { event, minutesAfterEnd, overlap };
+        })
+        .filter(candidate => candidate.minutesAfterEnd >= 0 && candidate.minutesAfterEnd <= 45)
+        .sort((a, b) => (b.overlap - a.overlap) || (a.minutesAfterEnd - b.minutesAfterEnd));
+
+      if (candidates.length === 0) {
+        return `${block}\n[TRANSKRIPT-ZUORDNUNG: ungeklärt – kein Meeting innerhalb von 45 Minuten vor der Transkription]`;
+      }
+
+      const best = candidates[0];
+      const confidence = best.overlap > 0 ? 'hoch' : 'mittel';
+      return `${block}\n[TRANSKRIPT-ZUORDNUNG: ${confidence} – ${best.event.summary}; Meeting-Ende ${new Date(best.event.end).toISOString()}; ${Math.round(best.minutesAfterEnd)} Minuten bis Transkription; Quelle: ${best.event.url}]`;
+    }
+  );
+}
+
 function loadLocalMemoryContext(): string {
   try {
     const memDir = path.join(process.cwd(), 'agent-memory');
@@ -3061,10 +3100,11 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
     fetchRecentChats(oauth2Client),
     fetchTasks(oauth2Client)
   ]);
+  const enrichedDriveContext = enrichTimestampTranscriptLinks(driveContext, eventsContext);
   const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
   const localMemoryContext = loadLocalMemoryContext();
-  const currentSquadSignals = extractCurrentSquadSignals(driveContext, chatsContext);
-  const projectCapacityEvidence = extractProjectCapacityEvidence(driveContext, emailsContext, chatsContext);
+  const currentSquadSignals = extractCurrentSquadSignals(enrichedDriveContext, chatsContext);
+  const projectCapacityEvidence = extractProjectCapacityEvidence(enrichedDriveContext, emailsContext, chatsContext);
   const skillContext = loadSkillContext([
     'workspace-context-ingestion',
     'task-state-reconciliation',
@@ -3141,7 +3181,7 @@ ${skillContext}
   • [Quelle: <Name>](<URL>)
 
 --- GOOGLE DRIVE (MEETING NOTES & DOKUMENTE) ---
-${driveContext}
+${enrichedDriveContext}
 
 --- E-MAILS ---
 ${emailsContext}
