@@ -2347,6 +2347,7 @@ STRIKTE DATUMS- UND FRISTENREGEL (FEHLERVERMEIDUNG):
 2. ERSTELLE NIEMALS To-Do-Vorschläge, Action Proposals oder Kalendereinträge mit einem Fälligkeitsdatum (dueDate) oder Timing IN DER VERGANGENHEIT (z. B. vor Wochen, Monaten oder Jahren wie vor 89 Wochen)!
 3. Alle vorgeschlagenen Fälligkeiten (dueDate / startTime) MÜSSEN am heutigen Tag (${todayISO}) oder in der ZUKUNFT liegen.
 4. Ignoriere historische Deadlines aus alten Dokumenten/Protokollen. Wenn ein Thema tatsächlich noch aktuell und offen ist, wähle als Fälligkeitsdatum HEUTE (${todayISO}) oder ein neues realistisches ZUKÜNFTIGES Datum.
+5. Jede neue Task-Aktion MUSS ein konkretes dueDate im Format YYYY-MM-DD enthalten. Wähle bei dringenden Blockern heute, bei normalen Projektaktionen den nächsten sinnvollen Arbeitstag und bei länger laufenden Themen das realistische Abschlussdatum.
 
 KUNDEN-MEETINGS & VORBEREITUNGS-REGEL (SPÄTESTENS 1 TAG VORHER):
 1. Die Vorbereitung auf alle Kunden-, Use-Case- und Partner-Meetings (wie Schwarz / DSV, Kunden-Workshops, Reviews etc.) MUSS SPÄTESTENS 1 TAG VORHER (am Vortag bzw. freitags für Montag) erfolgen!
@@ -3180,6 +3181,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
 8. Vollständigkeit: Gehe lückenlos alle aktiven, unerledigten Themen durch und synchronisiere sie mit den neuesten Quellen.
   8a. DOPPLUNGSVERBOT: Änderungen ausschließlich in Abschnitt 1, Squad-Lead-Kontrollen ausschließlich in Abschnitt 2, dringende Projektklärungen ausschließlich in Abschnitt 5 und weitere To-dos ausschließlich in Abschnitt 6. Meetings nennen nur Agenda und Vorbereitung. Abschnitt 7 enthält je Projekt nur eine kompakte Statuszeile ohne Wiederholung.
   8b. PRIORITÄT: Dringende Blocker, Entscheidungen, fällige Projektaktionen und konkrete nächste Schritte stehen vor der optionalen Projektstatusübersicht. Die Statusübersicht darf nie zulasten dieser Hinweise ausführlich werden.
+  8c. TODO-SYNCHRONISATION: Jede konkrete Aktion in Abschnitt 5 oder 6 muss als task in ACTION_PROPOSALS gespiegelt werden. Jede solche task-Aktion braucht ein sinnvolles dueDate im Format YYYY-MM-DD; offene Projektaktionen ohne Enddatum sind nicht zulässig.
 9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
 10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden.
 10. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!
@@ -3246,7 +3248,10 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
               continue;
             }
             const notes = tp.details?.notes || '';
-            const dueDate = tp.details?.dueDate;
+            const dueDate = tp.details?.dueDate || dateStr;
+            if (!tp.details?.dueDate) {
+              console.warn(`[Task Due Date] Kein dueDate für "${title}"; verwende ${dateStr}.`);
+            }
             const r = await createGoogleTaskDirect(title, notes, dueDate, accessToken);
             createdTasks.push({ title, id: r.id });
             createdTitles.push(title);
