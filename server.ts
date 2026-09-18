@@ -19,6 +19,7 @@ import { getFileContent, listAllFiles } from './src/server/drive-reader.ts';
 import { enrichTimestampTranscriptLinks, fetchDriveKnowledgeBaseContext as readDriveKnowledgeBaseContext } from './src/server/drive-context.ts';
 import { getEffectiveApiConfig, getModelName, isValidApiKey, loadAISettings, normalizeAiBaseUrl, saveAISettings } from './src/server/ai-config.ts';
 import { recordVerbatimEvidence } from './src/server/evidence.ts';
+import { validateTextField } from './src/server/input-validation.ts';
 
 export { fetchTasks };
 
@@ -43,15 +44,6 @@ app.use((_req, res, next) => {
 
 // Audio transcription uses base64 JSON; text-based action routes enforce tighter field limits below.
 app.use(express.json({ limit: '25mb' }));
-
-function validateTextField(value: unknown, field: string, maxLength: number, required = false): string | null {
-  if (value === undefined || value === null || value === '') {
-    return required ? `${field} ist erforderlich.` : null;
-  }
-  if (typeof value !== 'string') return `${field} muss Text sein.`;
-  if (value.length > maxLength) return `${field} darf maximal ${maxLength} Zeichen enthalten.`;
-  return null;
-}
 
 app.use('/api', createApiAuthMiddleware({
   validateGoogleToken: (token) => validateGoogleToken(token, getOAuth2Client),
