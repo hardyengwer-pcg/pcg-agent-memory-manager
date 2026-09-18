@@ -2241,7 +2241,7 @@ function ensureCriticalProjectTasks(summary: string, sourceContext: string, task
   }
 
   const taskStates = extractGoogleTaskStates(tasksContext);
-  if (taskStates.open.some(task => areTaskTextsSimilar(wireguardTitle, task))) {
+  if (taskStates.open.some(task => areTaskTextsSimilar(wireguardTitle, task) || /wireguard|timo\s+dempwolf/i.test(task) || /public\s+keys?.*hha|hha.*public\s+keys?/i.test(task))) {
     return summary;
   }
 
@@ -2274,6 +2274,52 @@ function ensureCriticalProjectTasks(summary: string, sourceContext: string, task
     }
   }
   return `${summary.trim()}\n\n<ACTION_PROPOSALS>\n${JSON.stringify([proposal], null, 2)}\n</ACTION_PROPOSALS>`;
+}
+
+function ensureActionSectionTasks(summary: string, tasksContext: string, fallbackDueDate: string): string {
+  const taskStates = extractGoogleTaskStates(tasksContext);
+  const actionMatch = summary.match(/<ACTION_PROPOSALS>([\s\S]*?)<\/ACTION_PROPOSALS>/i);
+  let proposals: any[] = [];
+  if (actionMatch) {
+    try {
+      proposals = JSON.parse(actionMatch[1].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim());
+    } catch {
+      proposals = [];
+    }
+  }
+
+  const additions: any[] = [];
+  for (const sectionTitle of ['## 5. 🚨 Dringende Klärungen & Projekt-To-dos', '## 6. 💡 Weitere nächste Schritte']) {
+    const sectionStart = summary.indexOf(sectionTitle);
+    if (sectionStart < 0) continue;
+    const nextSection = summary.indexOf('\n## ', sectionStart + sectionTitle.length);
+    const actionBlock = summary.indexOf('\n<ACTION_PROPOSALS>', sectionStart);
+    const sectionEnd = [nextSection, actionBlock].filter(index => index >= 0).sort((a, b) => a - b)[0] || summary.length;
+    const section = summary.slice(sectionStart, sectionEnd);
+    const itemPattern = /^- \*\*(.+?)\*\*(?:\s+—\s+Fälligkeit:\s+(\d{4}-\d{2}-\d{2}))?[\s\S]*?(?=\n- \*\*|$)/gm;
+    for (const match of section.matchAll(itemPattern)) {
+      const title = match[1].trim();
+      if (!title || /^(Weitere nächste Schritte|Dringende Klärungen)/i.test(title)) continue;
+      const dueDate = match[2] || fallbackDueDate;
+      const details = match[0].replace(/^- \*\*.+?\*\*/, '').replace(/—\s+Fälligkeit:\s+\d{4}-\d{2}-\d{2}/, '').replace(/\s+/g, ' ').trim();
+      const proposalText = `${title} ${details}`;
+      const alreadyRepresented = [...taskStates.open, ...taskStates.completed].some(task => areTaskTextsSimilar(title, task)) ||
+        proposals.some(proposal => proposal?.type === 'task' && areTaskTextsSimilar(title, proposal.details?.title || proposal.title || '')) ||
+        additions.some(proposal => areTaskTextsSimilar(title, proposal.details?.title || proposal.title || ''));
+      if (alreadyRepresented) continue;
+      additions.push({
+        id: `section-task-${additions.length + 1}`,
+        type: 'task',
+        title,
+        details: { title, notes: details || `Konkrete Aktion aus dem Daily-Abschnitt: ${title}`, dueDate },
+      });
+    }
+  }
+
+  if (additions.length === 0) return summary;
+  const merged = [...proposals, ...additions];
+  const serialized = `<ACTION_PROPOSALS>\n${JSON.stringify(merged, null, 2)}\n</ACTION_PROPOSALS>`;
+  return actionMatch ? summary.replace(actionMatch[0], serialized) : `${summary.trim()}\n\n${serialized}`;
 }
 
 function convertMarkdownTablesToCleanText(text: string): string {
@@ -3270,6 +3316,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
   8b. PRIORITÄT: Dringende Blocker, Entscheidungen, fällige Projektaktionen und konkrete nächste Schritte stehen vor der optionalen Projektstatusübersicht. Die Statusübersicht darf nie zulasten dieser Hinweise ausführlich werden.
   8c. TODO-SYNCHRONISATION: Jede konkrete Aktion in Abschnitt 5 oder 6 muss als task in ACTION_PROPOSALS gespiegelt werden. Jede solche task-Aktion braucht ein sinnvolles dueDate im Format YYYY-MM-DD; offene Projektaktionen ohne Enddatum sind nicht zulässig.
   8e. EXPLIZITE BENUTZERBITTEN: Wenn Hardy in Chat, Mail oder Meeting ausdrücklich sagt, dass er sich um einen konkreten Kundenblocker oder Zugang kümmern will (z. B. WireGuard-Zugang für HHA), muss daraus zwingend ein eigener Google-Task mit Owner Hardy, konkreter nächster Aktion und Fälligkeitsdatum entstehen. Ein bloßer Hinweis in Abschnitt 1 reicht nicht.
+  8f. TASK-ABGLEICH: Offene konkrete Aktionen aus Abschnitt 5 und 6 müssen in Google Tasks erscheinen. Erledigte Google Tasks und explizit abgeschlossene Aktionen dürfen weder im Bericht als offene nächste Schritte erscheinen noch erneut angelegt werden. Wenn eine Aktion heute fällig oder überfällig ist, verwende heute (${dateStr}) als Fälligkeitsdatum, sofern keine neue realistische Frist belegt ist.
   8d. E-MAIL-AUSGANG & FOLLOW-UP: Prüfe im E-Mail-Kontext ausdrücklich Nachrichten mit Status GESENDET. Wenn Hardy eine relevante Projekt-, Schätzungs-, Scope- oder Übergabemail gesendet hat und noch keine Antwort vorliegt, erstelle ein Nachhaken als Task mit Empfänger, Betreff, ursprünglichem Anliegen und gewünschter Antwort. Bei einer Abwesenheitsmeldung richte das dueDate auf den ersten oder zweiten Arbeitstag nach dem genannten Rückkehrdatum; ohne Rückkehrdatum auf 7–10 Tage nach Versand. Keine Follow-up-Aufgabe erzeugen, wenn bereits eine Antwort vorliegt oder ein gleichwertiger offener Google Task existiert.
 9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
 10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden.
@@ -3302,6 +3349,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     tasksContext,
     dateStr,
   );
+  summary = ensureActionSectionTasks(summary, tasksContext, dateStr);
 
   try {
     if (process.env.ENABLE_DAILY_MEMORY_CURATION === 'true') {
