@@ -164,15 +164,15 @@ export async function fetchOdooProjectStatusContext() {
         limit: 100,
       }),
     ]);
-    const projects = extractToolRecords(projectsResult).map(project => ({
+    const projects = extractToolRecords(projectsResult).slice(0, 40).map(project => ({
       ...project,
       customer: project.partner_id || project.company_id || project.account_id || null,
       time_left_hours: typeof project.allocated_hours === 'number' && typeof project.effective_hours === 'number'
         ? Math.max(0, project.allocated_hours - project.effective_hours)
         : null,
     }));
-    const tasks = extractToolRecords(tasksResult);
-    return `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\nProjekte:\n${JSON.stringify(projects, null, 2)}\nOffene/aktive Tasks:\n${JSON.stringify(tasks, null, 2)}\n`;
+    const tasks = extractToolRecords(tasksResult).slice(0, 80);
+    return `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\n[Quelle: Odoo MCP – project.project / project.task](https://odoo-mcp.gateway.pcg.io/mcp/)\nProjekte:\n${JSON.stringify(projects, null, 2)}\nOffene/aktive Tasks:\n${JSON.stringify(tasks, null, 2)}\n`;
   } catch (error: any) {
     console.warn('Odoo MCP project context notice:', error?.message || error);
     return '(Odoo-MCP-Projektkontext nicht verfügbar; keine Odoo-Fakten ableiten.)\n';
@@ -192,7 +192,18 @@ export async function fetchAtlassianJiraStatusContext() {
       maxResults: 50,
       fields: ['summary', 'status', 'project', 'priority', 'assignee', 'updated', 'labels'],
     });
-    return `Jira-Projektstatus (read-only, letzte 14 Tage, Site: ${jiraResource.url}):\n${JSON.stringify(extractToolJson(issuesResult) || issuesResult, null, 2)}\n`;
+    const jiraData = extractToolJson(issuesResult) || {};
+    const issues = Array.isArray(jiraData.issues) ? jiraData.issues.slice(0, 40).map((issue: any) => ({
+      key: issue.key,
+      summary: issue.fields?.summary,
+      project: issue.fields?.project,
+      status: issue.fields?.status,
+      priority: issue.fields?.priority,
+      assignee: issue.fields?.assignee,
+      updated: issue.fields?.updated,
+      labels: issue.fields?.labels,
+    })) : jiraData;
+    return `Jira-Projektstatus (read-only, letzte 14 Tage, Site: ${jiraResource.url}):\n[Quelle: Atlassian MCP – Jira searchJiraIssuesUsingJql](https://mcp.atlassian.com/v1/mcp/authv2)\n${JSON.stringify({ total: jiraData.total, issues }, null, 2)}\n`;
   } catch (error: any) {
     console.warn('Atlassian Jira context notice:', error?.message || error);
     return '(Jira-MCP-Projektkontext nicht verfügbar; keine Jira-Fakten ableiten.)\n';

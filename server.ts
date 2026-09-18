@@ -1527,6 +1527,21 @@ export function ensureActionSectionTasks(summary: string, tasksContext: string, 
   return actionMatch ? summary.replace(actionMatch[0], serialized) : `${summary.trim()}\n\n${serialized}`;
 }
 
+function ensureMcpSourceMentions(summary: string, odooContext: string, jiraContext: string): string {
+  const mentions: string[] = [];
+  if (/Odoo-Projekt- und Zeiterfassungskontext/.test(odooContext) && !/\[Quelle: Odoo MCP/.test(summary)) {
+    mentions.push('- **Odoo-Abgleich:** Aktuelle Odoo-Projekt-, Task- und Zeiterfassungsdaten wurden read-only verarbeitet. [Quelle: Odoo MCP](https://odoo-mcp.gateway.pcg.io/mcp/)');
+  }
+  if (/Jira-Projektstatus/.test(jiraContext) && !/\[Quelle: Atlassian MCP/.test(summary)) {
+    mentions.push('- **Jira-Abgleich:** Aktuelle Jira-Issues und Statusdaten wurden read-only verarbeitet. [Quelle: Atlassian MCP](https://mcp.atlassian.com/v1/mcp/authv2)');
+  }
+  if (mentions.length === 0) return summary;
+  const statusHeader = '\n## 7. 📋 Kompakte Projektstatusübersicht';
+  return summary.includes(statusHeader)
+    ? summary.replace(statusHeader, `\n${mentions.join('\n')}\n${statusHeader}`)
+    : `${summary}\n${mentions.join('\n')}`;
+}
+
 function convertMarkdownTablesToCleanText(text: string): string {
   if (!text) return "";
   const lines = text.split(/\r?\n/);
@@ -2547,6 +2562,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     dateStr,
   );
   summary = ensureActionSectionTasks(summary, tasksContext, dateStr);
+  summary = ensureMcpSourceMentions(summary, odooContext, jiraContext);
 
   try {
     if (process.env.ENABLE_DAILY_MEMORY_CURATION === 'true') {
