@@ -12,6 +12,7 @@ coverage/
 .latest_token.json
 .google-refresh-token.json
 .odoo-mcp-token.json
+.atlassian-mcp-token.json
 .chat-state.json
 .ai_settings.json
 .last_cron_status.json

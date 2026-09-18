@@ -207,24 +207,7 @@ export async function fetchAtlassianJiraStatusContext() {
 export function getConfiguredRemoteMcpServer(name: string): RemoteMcpServerConfig {
   const config = parseRemoteMcpServers()[name];
   if (!config) throw new Error(`Kein Remote-MCP-Server '${name}' konfiguriert.`);
-  const effectiveConfig = { ...config };
-  if (name === 'odoo-mcp' && !effectiveConfig.headers) {
-    try {
-      const token = JSON.parse(fs.readFileSync('.odoo-mcp-token.json', 'utf8')).access_token;
-      if (token) effectiveConfig.headers = { Authorization: `Bearer ${token}` };
-    } catch {
-      // The remote server will return 401 until authentication is completed.
-    }
-  }
-  if (name === 'atlassian' && !effectiveConfig.headers) {
-    try {
-      const token = JSON.parse(fs.readFileSync('.atlassian-mcp-token.json', 'utf8')).access_token;
-      if (token) effectiveConfig.headers = { Authorization: `Bearer ${token}` };
-    } catch {
-      // The remote server will return 401 until authentication is completed.
-    }
-  }
-  return effectiveConfig;
+  return { ...config };
 }
 
 export async function getConfiguredRemoteMcpServerAsync(name: string, fetchImpl: typeof fetch = fetch): Promise<RemoteMcpServerConfig> {
