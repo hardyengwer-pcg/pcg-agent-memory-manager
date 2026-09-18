@@ -142,14 +142,8 @@ function extractToolJson(result: any): any {
 export async function fetchOdooProjectStatusContext() {
   try {
     const config = await getConfiguredRemoteMcpServerAsync('odoo-mcp');
-    const projectFieldResult = await callRemoteMcpTool(config, 'get_model_fields', { model: 'project.project' });
-    const taskFieldResult = await callRemoteMcpTool(config, 'get_model_fields', { model: 'project.task' });
-    const availableFields = (result: any) => new Set(extractToolRecords(result).map(field => field.name));
-    const projectFields = availableFields(projectFieldResult);
-    const taskFields = availableFields(taskFieldResult);
-    const selectFields = (available: Set<string>, candidates: string[]) => candidates.filter(field => available.has(field));
-    const projectQueryFields = selectFields(projectFields, ['id', 'name', 'partner_id', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline']);
-    const taskQueryFields = selectFields(taskFields, ['id', 'name', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours']);
+    const projectQueryFields = ['id', 'name', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'];
+    const taskQueryFields = ['id', 'name', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'];
     const [projectsResult, tasksResult] = await Promise.all([
       callRemoteMcpTool(config, 'search_records', {
         model: 'project.project',
