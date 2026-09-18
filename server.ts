@@ -16,7 +16,25 @@ const PORT = 3000;
 
 const isMain = process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
 
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+// Audio transcription uses base64 JSON; text-based action routes enforce tighter field limits below.
 app.use(express.json({ limit: '25mb' }));
+
+function validateTextField(value: unknown, field: string, maxLength: number, required = false): string | null {
+  if (value === undefined || value === null || value === '') {
+    return required ? `${field} ist erforderlich.` : null;
+  }
+  if (typeof value !== 'string') return `${field} muss Text sein.`;
+  if (value.length > maxLength) return `${field} darf maximal ${maxLength} Zeichen enthalten.`;
+  return null;
+}
 
 const allowedGoogleEmail = process.env.GOOGLE_ALLOWED_EMAIL?.trim().toLowerCase();
 
@@ -2565,6 +2583,8 @@ app.post('/api/actions/task', async (req, res) => {
   const token = (req as any).googleToken;
   try {
     const { title, notes, dueDate } = req.body;
+    const fieldError = validateTextField(title, 'Titel', 500, true) || validateTextField(notes, 'Notizen', 10000) || validateTextField(dueDate, 'Fälligkeitsdatum', 30);
+    if (fieldError) return res.status(400).json({ error: fieldError });
     if (!title) {
       return res.status(400).json({ error: "Titel der Aufgabe ist erforderlich." });
     }
@@ -2621,9 +2641,8 @@ app.post('/api/actions/email', async (req, res) => {
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     const { to, subject, body, isDraft = true } = req.body;
 
-    if (!to || !subject || !body) {
-      return res.status(400).json({ error: "Empfänger (to), Betreff (subject) und Text (body) sind erforderlich." });
-    }
+    const fieldError = validateTextField(to, 'Empfänger', 2000, true) || validateTextField(subject, 'Betreff', 500, true) || validateTextField(body, 'Text', 100000, true);
+    if (fieldError) return res.status(400).json({ error: fieldError });
 
     const cleanBody = cleanContentForEmail(body);
 
@@ -2687,9 +2706,8 @@ app.post('/api/actions/calendar', async (req, res) => {
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
     const { summary, description, startTime, endTime } = req.body;
 
-    if (!summary || !startTime) {
-      return res.status(400).json({ error: "Titel (summary) und Startzeit (startTime) sind erforderlich." });
-    }
+    const fieldError = validateTextField(summary, 'Titel', 500, true) || validateTextField(description, 'Beschreibung', 10000) || validateTextField(startTime, 'Startzeit', 80, true) || validateTextField(endTime, 'Endzeit', 80);
+    if (fieldError) return res.status(400).json({ error: fieldError });
 
     const startObj = new Date(startTime);
     const endObj = endTime ? new Date(endTime) : new Date(startObj.getTime() + 30 * 60 * 1000);
@@ -2731,9 +2749,8 @@ app.post('/api/actions/chat', async (req, res) => {
     const chat = google.chat({ version: 'v1', auth: oauth2Client });
     const { text, spaceName } = req.body;
 
-    if (!text) {
-      return res.status(400).json({ error: "Nachrichtentext ist erforderlich." });
-    }
+    const fieldError = validateTextField(text, 'Nachrichtentext', 20000, true) || validateTextField(spaceName, 'Chat-Raum', 200);
+    if (fieldError) return res.status(400).json({ error: fieldError });
 
     let targetSpace = spaceName;
     if (!targetSpace) {
@@ -2778,9 +2795,8 @@ app.post('/api/actions/drive', async (req, res) => {
     const drive = await getDriveClient(token);
     const { fileName = `Notiz_${new Date().toISOString().split('T')[0]}.md`, content } = req.body;
 
-    if (!content) {
-      return res.status(400).json({ error: "Inhalt für das Dokument ist erforderlich." });
-    }
+    const fieldError = validateTextField(fileName, 'Dateiname', 255, true) || validateTextField(content, 'Dokumentinhalt', 1000000, true);
+    if (fieldError) return res.status(400).json({ error: fieldError });
 
     const fileMetadata = { name: fileName, parents: [driveFolderId], mimeType: 'text/markdown' };
     const media = { mimeType: 'text/markdown', body: content };
