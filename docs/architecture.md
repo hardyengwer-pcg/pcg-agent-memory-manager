@@ -13,6 +13,9 @@
 | `src/server/tasks-reader.ts` | Autoritative offene/erledigte Google Tasks |
 | `src/server/drive-reader.ts` | Drive-Dateilisting und Datei-Exporte |
 | `src/server/drive-context.ts` | Drive-Kontextauswahl, Relevanzfilter und Memory-Kontext |
+| `src/server/ai-config.ts` | AI-Key, Gateway-Allowlist, Modellauflösung und lokale AI-Einstellungen |
+| `src/server/evidence.ts` | Gemeinsamer Adapter zum unveränderlichen Evidence-Ledger |
+| `src/server/input-validation.ts` | Begrenzung und Typprüfung textbasierter Action-Payloads |
 | `cli.ts` | Headless-Kommandos und OAuth-Refresh-Token-Verwaltung |
 | `verbatim-evidence-ledger.ts` | Unveränderlicher Rohquellen-Ledger mit SHA-256 Hashes, Zeitstempeln und Hybridsuche |
 | `temporal-facts.ts` | Temporales Faktenmodell mit Gültigkeitsfenstern und automatischer Invalidierung |
@@ -34,6 +37,12 @@
 - **Web:** lokale UI fuer interaktive Recherche und bestaetigte Aktionen.
 - **CLI:** fuer headless Briefings, Quellensuche, Faktenabfrage, Entscheidungsablage und Windows Task Scheduler.
 - **Google Chat:** `chat-process` liest neue Nachrichten im konfigurierten Raum und antwortet darauf.
+
+## Qualitäts- und Sicherheitsprüfungen
+
+- `npm run check` führt Lint, Tests, Produktions-Build, `npm audit` und den Scan getrackter Dateien auf Secrets aus.
+- GitHub Actions führt denselben Check bei Pushes und Pull Requests gegen `main` aus.
+- Reader-Tests verwenden injizierte Google-Clients und benötigen keine Workspace-Zugangsdaten.
 
 ## Persistenz
 
