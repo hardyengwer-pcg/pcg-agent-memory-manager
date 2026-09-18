@@ -13,6 +13,9 @@ import { recordDecision, searchDecisions, type DecisionRecordInput } from './dec
 import { createApiAuthMiddleware, validateGoogleToken } from './src/server/api-auth.ts';
 import { fetchUpcomingEvents } from './src/server/calendar-reader.ts';
 import { fetchRecentChats } from './src/server/chat-reader.ts';
+import { fetchRecentEmails } from './src/server/gmail-reader.ts';
+
+export { fetchRecentEmails };
 
 export { fetchRecentChats };
 
@@ -723,7 +726,7 @@ export async function getDriveClient(accessToken: string) {
   return google.drive({ version: 'v3', auth: getOAuth2Client(accessToken) });
 }
 
-export async function fetchRecentEmails(auth: any) {
+async function fetchRecentEmailsLegacy(auth: any) {
   try {
     const gmail = google.gmail({ version: 'v1', auth });
     
@@ -2750,7 +2753,7 @@ app.post('/api/agent/chat', async (req, res) => {
   try {
     const oauth2Client = getOAuth2Client(accessToken);
     const contextData = await fetchDriveKnowledgeBaseContext(accessToken);
-    const emailsContext = await fetchRecentEmails(oauth2Client);
+    const emailsContext = await fetchRecentEmails(oauth2Client, recordVerbatimEvidence);
     const eventsContext = await fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence);
     const chatsContext = await fetchRecentChats(oauth2Client, recordVerbatimEvidence);
     const tasksContext = await fetchTasks(oauth2Client);
@@ -3013,7 +3016,7 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
     tasksContext
   ] = await Promise.all([
     fetchDriveKnowledgeBaseContext(accessToken),
-    fetchRecentEmails(oauth2Client),
+    fetchRecentEmails(oauth2Client, recordVerbatimEvidence),
     fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence),
     fetchRecentChats(oauth2Client, recordVerbatimEvidence),
     fetchTasks(oauth2Client)
@@ -3362,7 +3365,7 @@ app.get('/api/tags', async (req, res) => {
     const driveContext = await fetchDriveKnowledgeBaseContext(token);
     const tasksContext = await fetchTasks(oauth2Client);
     const eventsContext = await fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence);
-    const emailsContext = await fetchRecentEmails(oauth2Client);
+    const emailsContext = await fetchRecentEmails(oauth2Client, recordVerbatimEvidence);
     const cronStatus = getCronStatus();
 
     const allText = [
