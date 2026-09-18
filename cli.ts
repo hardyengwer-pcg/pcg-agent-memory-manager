@@ -36,6 +36,7 @@ import { discoverConfiguredRemoteMcpTools } from './src/server/remote-mcp.ts';
 const ROOT = process.cwd();
 const ENV_FILE = path.join(ROOT, '.env');
 const REFRESH_FILE = path.join(ROOT, 'agent-memory', '.google-refresh-token.json');
+const ODOO_MCP_TOKEN_FILE = path.join(ROOT, '.odoo-mcp-token.json');
 
 const CHAT_MARKER = '[PCG-Agent]';
 const CHAT_STATE_FILE = path.join(ROOT, '.chat-state.json');
@@ -43,6 +44,8 @@ const CHAT_STATE_FILE = path.join(ROOT, '.chat-state.json');
 const DEFAULT_CLIENT_ID = '261415172337-16a674uqih6mk269b0hj8q61qguq6scp.apps.googleusercontent.com';
 const REDIRECT_PORT = Number(process.env.GOOGLE_REDIRECT_PORT || 4315);
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}`;
+const ODOO_MCP_REDIRECT_PORT = Number(process.env.ODOO_MCP_REDIRECT_PORT || 4316);
+const ODOO_MCP_REDIRECT_URI = `http://127.0.0.1:${ODOO_MCP_REDIRECT_PORT}/callback`;
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive',
@@ -99,6 +102,77 @@ function postForm(url: string, params: Record<string, string>): Promise<any> {
     req.write(body);
     req.end();
   });
+}
+
+async function cmdOdooMcpAuth() {
+  const verifier = base64url(crypto.randomBytes(32));
+  const challenge = base64url(crypto.createHash('sha256').update(verifier).digest());
+  const registration = await new Promise<any>((resolve, reject) => {
+    const body = JSON.stringify({
+      client_name: 'PCG Agent Memory Manager',
+      redirect_uris: [ODOO_MCP_REDIRECT_URI],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: 'odoo.read offline_access',
+    });
+    const request = https.request('https://auth.gateway.pcg.io/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, response => {
+      let data = '';
+      response.on('data', chunk => data += chunk);
+      response.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (response.statusCode && response.statusCode >= 400) reject(new Error(`Odoo-MCP-Client-Registrierung fehlgeschlagen (${response.statusCode}): ${data}`));
+          else resolve(parsed);
+        } catch (error) { reject(error); }
+      });
+    });
+    request.on('error', reject);
+    request.write(body);
+    request.end();
+  });
+
+  if (!registration.client_id) throw new Error('Odoo-MCP lieferte keine client_id zurück.');
+  const authUrl = new URL('https://auth.gateway.pcg.io/authorize');
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('client_id', registration.client_id);
+  authUrl.searchParams.set('redirect_uri', ODOO_MCP_REDIRECT_URI);
+  authUrl.searchParams.set('scope', 'odoo.read offline_access');
+  authUrl.searchParams.set('resource', 'https://odoo-mcp.gateway.pcg.io/mcp/');
+  authUrl.searchParams.set('code_challenge', challenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+
+  const codePromise = new Promise<string>((resolve, reject) => {
+    const callbackServer = http.createServer((req, res) => {
+      const url = new URL(req.url || '/', `http://127.0.0.1:${ODOO_MCP_REDIRECT_PORT}`);
+      const error = url.searchParams.get('error');
+      const code = url.searchParams.get('code');
+      res.writeHead(error ? 400 : 200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(error ? `<h2>Odoo-Anmeldung fehlgeschlagen: ${error}</h2>` : '<h2>Odoo-Anmeldung erfolgreich. Dieses Fenster kann geschlossen werden.</h2>');
+      callbackServer.close();
+      if (error) reject(new Error(`Odoo-OAuth fehlgeschlagen: ${error}`));
+      else if (code) resolve(code);
+      else reject(new Error('Odoo-OAuth lieferte keinen Code.'));
+    });
+    callbackServer.listen(ODOO_MCP_REDIRECT_PORT, '127.0.0.1');
+  });
+
+  console.log(`Odoo-MCP-Anmeldung wird geöffnet: ${authUrl}`);
+  openBrowser(authUrl.toString());
+  const code = await codePromise;
+  const token = await postForm('https://auth.gateway.pcg.io/token', {
+    grant_type: 'authorization_code',
+    client_id: registration.client_id,
+    redirect_uri: ODOO_MCP_REDIRECT_URI,
+    code,
+    code_verifier: verifier,
+  });
+  if (!token.access_token) throw new Error(`Odoo-MCP lieferte keinen Access-Token: ${JSON.stringify(token)}`);
+  fs.writeFileSync(ODOO_MCP_TOKEN_FILE, JSON.stringify({ ...token, client_id: registration.client_id, redirect_uri: ODOO_MCP_REDIRECT_URI, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+  console.log(`Odoo-MCP-Token lokal gespeichert: ${ODOO_MCP_TOKEN_FILE}`);
 }
 
 function exchangeCode(code: string, verifier: string, clientSecret: string) {
@@ -805,6 +879,7 @@ PCG Agent CLI – Befehle:
   npm run agent -- decision-search ["Begriff"] [--project "P"] [--tag "t"] [--owner "O"]
   npm run agent -- memory-mcp       Startet den MCP Server (Stdio) für Claude Code / Gemini CLI
   npm run agent -- mcp-discover     Listet Tools der konfigurierten Remote-MCP-Server (read-only)
+  npm run agent -- mcp-auth-odoo   Einmalige Odoo-MCP-OAuth-Anmeldung
 
 Chat-Rückkanal (Google Chat Bot):
   npm run agent -- chat-spaces         Chat-Räume auflisten (Raum-ID für .env)
@@ -843,6 +918,7 @@ async function main() {
       case 'decision-search': return await cmdDecisionSearch(args.slice(1));
       case 'memory-mcp': return await runMemoryMcpStdio();
       case 'mcp-discover': return await cmdMcpDiscover();
+      case 'mcp-auth-odoo': return await cmdOdooMcpAuth();
       case 'chat-spaces': return await cmdChatSpaces();
       case 'chat-send': return await cmdChatSend(args.slice(1).join(' '));
       case 'chat-process': return await cmdChatProcess();

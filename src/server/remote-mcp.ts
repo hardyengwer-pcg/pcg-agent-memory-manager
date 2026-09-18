@@ -69,10 +69,20 @@ export async function discoverConfiguredRemoteMcpTools(fetchImpl: typeof fetch =
   for (const [name, config] of Object.entries(servers)) {
     if (!config.enabled) continue;
     try {
-      results[name] = await discoverRemoteMcpTools(config, fetchImpl);
+      const effectiveConfig = { ...config };
+      if (name === 'odoo-mcp' && !effectiveConfig.headers) {
+        try {
+          const token = JSON.parse(fs.readFileSync('.odoo-mcp-token.json', 'utf8')).access_token;
+          if (token) effectiveConfig.headers = { Authorization: `Bearer ${token}` };
+        } catch {
+          // Discovery will report the remote 401 until the one-time auth flow is completed.
+        }
+      }
+      results[name] = await discoverRemoteMcpTools(effectiveConfig, fetchImpl);
     } catch (error: any) {
       results[name] = { error: error?.message || String(error) };
     }
   }
   return results;
 }
+import fs from 'node:fs';

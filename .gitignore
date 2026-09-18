@@ -11,6 +11,7 @@ coverage/
 # Secrets & lokale Zustandsdateien (Token / API-Key / Chat-State)
 .latest_token.json
 .google-refresh-token.json
+.odoo-mcp-token.json
 .chat-state.json
 .ai_settings.json
 .last_cron_status.json
