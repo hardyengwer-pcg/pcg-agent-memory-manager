@@ -16,6 +16,7 @@ import { fetchRecentChats } from './src/server/chat-reader.ts';
 import { fetchRecentEmails } from './src/server/gmail-reader.ts';
 import { fetchTasks } from './src/server/tasks-reader.ts';
 import { getFileContent, listAllFiles } from './src/server/drive-reader.ts';
+import { fetchDriveKnowledgeBaseContext as readDriveKnowledgeBaseContext } from './src/server/drive-context.ts';
 
 export { fetchTasks };
 
@@ -728,6 +729,20 @@ export function getOAuth2Client(accessToken: string) {
 
 export async function getDriveClient(accessToken: string) {
   return google.drive({ version: 'v3', auth: getOAuth2Client(accessToken) });
+}
+
+function fetchDriveContext(accessToken: string) {
+  return readDriveKnowledgeBaseContext(accessToken, driveFolderId, {
+    getDriveClient,
+    listAllFiles,
+    getFileContent,
+    recordEvidence: recordVerbatimEvidence,
+    loadLocalMemoryContext,
+  });
+}
+
+export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
+  return fetchDriveContext(accessToken);
 }
 
 async function fetchRecentEmailsLegacy(auth: any) {
@@ -1573,7 +1588,7 @@ ${input.localMemoryContext}`,
   return concepts.map(concept => `${concept.category}/${concept.slug}.md`);
 }
 
-export async function fetchDriveKnowledgeBaseContext(accessToken: string) {
+async function fetchDriveKnowledgeBaseContextLegacy(accessToken: string) {
   try {
     const drive = await getDriveClient(accessToken);
     
@@ -2756,7 +2771,7 @@ app.post('/api/agent/chat', async (req, res) => {
 
   try {
     const oauth2Client = getOAuth2Client(accessToken);
-    const contextData = await fetchDriveKnowledgeBaseContext(accessToken);
+    const contextData = await fetchDriveContext(accessToken);
     const emailsContext = await fetchRecentEmails(oauth2Client, recordVerbatimEvidence);
     const eventsContext = await fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence);
     const chatsContext = await fetchRecentChats(oauth2Client, recordVerbatimEvidence);
@@ -3019,7 +3034,7 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
     chatsContext,
     tasksContext
   ] = await Promise.all([
-    fetchDriveKnowledgeBaseContext(accessToken),
+    fetchDriveContext(accessToken),
     fetchRecentEmails(oauth2Client, recordVerbatimEvidence),
     fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence),
     fetchRecentChats(oauth2Client, recordVerbatimEvidence),
@@ -3366,7 +3381,7 @@ app.get('/api/tags', async (req, res) => {
 
   try {
     const oauth2Client = getOAuth2Client(token);
-    const driveContext = await fetchDriveKnowledgeBaseContext(token);
+    const driveContext = await fetchDriveContext(token);
     const tasksContext = await fetchTasks(oauth2Client, recordVerbatimEvidence);
     const eventsContext = await fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence);
     const emailsContext = await fetchRecentEmails(oauth2Client, recordVerbatimEvidence);
