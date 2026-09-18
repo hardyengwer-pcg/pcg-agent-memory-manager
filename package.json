@@ -12,7 +12,8 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "check": "npm run lint && npm run test && npm run build && npm audit"
+    "secrets": "node scripts/check-tracked-secrets.mjs",
+    "check": "npm run lint && npm run test && npm run build && npm audit && npm run secrets"
   },
   "dependencies": {
     "@google/genai": "^2.12.0",
