@@ -41,6 +41,30 @@ function parseMcpResponse(response: Response): Promise<any> {
   });
 }
 
+async function refreshStoredRemoteToken(name: string, tokenData: any, fetchImpl: typeof fetch) {
+  const tokenEndpoint = name === 'odoo-mcp' ? 'https://auth.gateway.pcg.io/token' : 'https://mcp.atlassian.com/v1/token';
+  const body = new URLSearchParams({ grant_type: 'refresh_token', client_id: tokenData.client_id, refresh_token: tokenData.refresh_token });
+  const response = await fetchImpl(tokenEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+  if (!response.ok) throw new Error(`${name}-MCP-Token-Refresh fehlgeschlagen (${response.status}).`);
+  const refreshed = await response.json();
+  const updated = { ...tokenData, ...refreshed, updatedAt: new Date().toISOString() };
+  fs.writeFileSync(name === 'odoo-mcp' ? '.odoo-mcp-token.json' : '.atlassian-mcp-token.json', JSON.stringify(updated, null, 2), 'utf8');
+  return refreshed.access_token;
+}
+
+async function getStoredRemoteToken(name: string, fetchImpl: typeof fetch) {
+  const file = name === 'odoo-mcp' ? '.odoo-mcp-token.json' : '.atlassian-mcp-token.json';
+  try {
+    const tokenData = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const expiresAt = tokenData.expires_at || (tokenData.updatedAt && tokenData.expires_in ? Date.parse(tokenData.updatedAt) + Number(tokenData.expires_in) * 1000 : 0);
+    if (tokenData.access_token && expiresAt > Date.now() + 60_000) return tokenData.access_token;
+    if (tokenData.refresh_token && tokenData.client_id) return await refreshStoredRemoteToken(name, tokenData, fetchImpl);
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  return undefined;
+}
+
 async function initializeRemoteMcp(config: RemoteMcpServerConfig, fetchImpl: typeof fetch) {
   const headers = { Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json', ...(config.headers || {}) };
   const response = await fetchImpl(config.url, {
@@ -87,14 +111,8 @@ export async function discoverConfiguredRemoteMcpTools(fetchImpl: typeof fetch =
     if (!config.enabled) continue;
     try {
       const effectiveConfig = { ...config };
-      if (name === 'odoo-mcp' && !effectiveConfig.headers) {
-        try {
-          const token = JSON.parse(fs.readFileSync('.odoo-mcp-token.json', 'utf8')).access_token;
-          if (token) effectiveConfig.headers = { Authorization: `Bearer ${token}` };
-        } catch {
-          // Discovery will report the remote 401 until the one-time auth flow is completed.
-        }
-      }
+      const token = await getStoredRemoteToken(name, fetchImpl);
+      if (token && !effectiveConfig.headers) effectiveConfig.headers = { Authorization: `Bearer ${token}` };
       results[name] = await discoverRemoteMcpTools(effectiveConfig, fetchImpl);
     } catch (error: any) {
       results[name] = { error: error?.message || String(error) };
@@ -115,9 +133,15 @@ function extractToolRecords(result: any): any[] {
   }
 }
 
+function extractToolJson(result: any): any {
+  const text = result?.content?.find((item: any) => item.type === 'text')?.text;
+  if (!text) return result?.structuredContent || null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
 export async function fetchOdooProjectStatusContext() {
   try {
-    const config = getConfiguredRemoteMcpServer('odoo-mcp');
+    const config = await getConfiguredRemoteMcpServerAsync('odoo-mcp');
     const projectFieldResult = await callRemoteMcpTool(config, 'get_model_fields', { model: 'project.project' });
     const taskFieldResult = await callRemoteMcpTool(config, 'get_model_fields', { model: 'project.task' });
     const availableFields = (result: any) => new Set(extractToolRecords(result).map(field => field.name));
@@ -155,6 +179,26 @@ export async function fetchOdooProjectStatusContext() {
   }
 }
 
+export async function fetchAtlassianJiraStatusContext() {
+  try {
+    const config = await getConfiguredRemoteMcpServerAsync('atlassian');
+    const resourcesResult = await callRemoteMcpTool(config, 'getAccessibleAtlassianResources');
+    const resources = extractToolJson(resourcesResult);
+    const jiraResource = Array.isArray(resources) ? resources.find(resource => resource.scopes?.includes('read:jira-work')) : null;
+    if (!jiraResource?.id) return '(Jira-MCP liefert keine zugängliche Jira-Ressource.)\n';
+    const issuesResult = await callRemoteMcpTool(config, 'searchJiraIssuesUsingJql', {
+      cloudId: jiraResource.id,
+      jql: 'updated >= -14d ORDER BY updated DESC',
+      maxResults: 50,
+      fields: ['summary', 'status', 'project', 'priority', 'assignee', 'updated', 'labels'],
+    });
+    return `Jira-Projektstatus (read-only, letzte 14 Tage, Site: ${jiraResource.url}):\n${JSON.stringify(extractToolJson(issuesResult) || issuesResult, null, 2)}\n`;
+  } catch (error: any) {
+    console.warn('Atlassian Jira context notice:', error?.message || error);
+    return '(Jira-MCP-Projektkontext nicht verfügbar; keine Jira-Fakten ableiten.)\n';
+  }
+}
+
 export function getConfiguredRemoteMcpServer(name: string): RemoteMcpServerConfig {
   const config = parseRemoteMcpServers()[name];
   if (!config) throw new Error(`Kein Remote-MCP-Server '${name}' konfiguriert.`);
@@ -167,6 +211,20 @@ export function getConfiguredRemoteMcpServer(name: string): RemoteMcpServerConfi
       // The remote server will return 401 until authentication is completed.
     }
   }
+  if (name === 'atlassian' && !effectiveConfig.headers) {
+    try {
+      const token = JSON.parse(fs.readFileSync('.atlassian-mcp-token.json', 'utf8')).access_token;
+      if (token) effectiveConfig.headers = { Authorization: `Bearer ${token}` };
+    } catch {
+      // The remote server will return 401 until authentication is completed.
+    }
+  }
   return effectiveConfig;
+}
+
+export async function getConfiguredRemoteMcpServerAsync(name: string, fetchImpl: typeof fetch = fetch): Promise<RemoteMcpServerConfig> {
+  const config = getConfiguredRemoteMcpServer(name);
+  const token = await getStoredRemoteToken(name, fetchImpl);
+  return token && !config.headers ? { ...config, headers: { Authorization: `Bearer ${token}` } } : config;
 }
 import fs from 'node:fs';
