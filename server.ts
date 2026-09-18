@@ -17,6 +17,7 @@ import { fetchRecentEmails } from './src/server/gmail-reader.ts';
 import { fetchTasks } from './src/server/tasks-reader.ts';
 import { getFileContent, listAllFiles } from './src/server/drive-reader.ts';
 import { enrichTimestampTranscriptLinks, fetchDriveKnowledgeBaseContext as readDriveKnowledgeBaseContext } from './src/server/drive-context.ts';
+import { getEffectiveApiConfig, getModelName, isValidApiKey, loadAISettings, normalizeAiBaseUrl, saveAISettings } from './src/server/ai-config.ts';
 
 export { fetchTasks };
 
@@ -204,118 +205,6 @@ function recordVerbatimEvidence(inputs: VerbatimEvidenceInput[]): void {
     if (records.length > 0) console.log(`[Evidence Ledger] ${records.length} neue unveränderte Quelle(n) gespeichert.`);
   } catch (error: any) {
     console.warn('[Evidence Ledger] Speicherung übersprungen:', error?.message || error);
-  }
-}
-
-const AI_SETTINGS_FILE = path.join(process.cwd(), '.ai_settings.json');
-
-interface AISettings {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-}
-
-function loadAISettings(): AISettings {
-  try {
-    if (fs.existsSync(AI_SETTINGS_FILE)) {
-      return JSON.parse(fs.readFileSync(AI_SETTINGS_FILE, 'utf-8'));
-    }
-  } catch (e) {
-    console.error("Error reading AI settings file:", e);
-  }
-  return {};
-}
-
-function saveAISettings(settings: AISettings) {
-  try {
-    fs.writeFileSync(AI_SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
-  } catch (e) {
-    console.error("Error saving AI settings file:", e);
-  }
-}
-
-function isValidApiKey(key?: string): boolean {
-  if (!key) return false;
-  const trimmed = key.trim();
-  if (trimmed.length < 5 || trimmed.length > 250) return false;
-  if (/\s/.test(trimmed)) return false; // Reject keys containing spaces or newlines
-  return true;
-}
-
-function normalizeAiBaseUrl(value?: string): string {
-  const rawValue = value?.trim();
-  if (!rawValue) return '';
-
-  let url: URL;
-  try {
-    url = new URL(rawValue);
-  } catch {
-    throw new Error('Die Gateway-URL ist ungültig.');
-  }
-
-  const allowedHosts = new Set([
-    'gateway.pcg.io',
-    'generativelanguage.googleapis.com',
-    ...(process.env.AI_ALLOWED_BASE_URLS || '').split(',').map(host => host.trim().toLowerCase()).filter(Boolean)
-  ]);
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !allowedHosts.has(url.hostname.toLowerCase())) {
-    throw new Error('Die Gateway-URL ist nicht freigegeben.');
-  }
-
-  return url.toString().replace(/\/+$/, '');
-}
-
-function getEffectiveApiConfig(customApiKey?: string, customBaseUrl?: string) {
-  const settings = loadAISettings();
-  const rawCustom = (customApiKey !== undefined && customApiKey.trim() !== '') ? customApiKey.trim() : undefined;
-  const rawSaved = (settings.apiKey && isValidApiKey(settings.apiKey)) ? settings.apiKey.trim() : undefined;
-
-  let apiKey = rawCustom || rawSaved || process.env.GEMINI_API_KEY || '';
-  if (apiKey && !isValidApiKey(apiKey)) {
-    apiKey = process.env.GEMINI_API_KEY || '';
-  }
-
-  const configuredBaseUrl = customBaseUrl !== undefined && customBaseUrl.trim() !== '' ? customBaseUrl : settings.baseUrl;
-  const userBaseUrl = normalizeAiBaseUrl(configuredBaseUrl);
-
-  let baseUrl = userBaseUrl;
-
-  if (apiKey && apiKey.startsWith('sk-')) {
-    if (!baseUrl) {
-      baseUrl = 'https://gateway.pcg.io';
-    }
-  } else {
-    // If not using an sk- LiteLLM key, route directly to Google Gemini API
-    baseUrl = '';
-  }
-
-  if (baseUrl) {
-    baseUrl = normalizeAiBaseUrl(baseUrl);
-  }
-
-  const isGateway = Boolean(baseUrl && (baseUrl.includes('gateway') || baseUrl.includes('pcg')));
-
-  return { apiKey, baseUrl, isGateway };
-}
-
-function getModelName(customModel?: string, customApiKey?: string, customBaseUrl?: string): string {
-  const settings = loadAISettings();
-  const { isGateway } = getEffectiveApiConfig(customApiKey, customBaseUrl);
-
-  const rawModel = (customModel && customModel.trim() !== '') 
-    ? customModel.trim() 
-    : (settings.model && settings.model.trim() !== '' ? settings.model.trim() : '');
-
-  if (isGateway) {
-    if (rawModel && (rawModel === 'gemini-3.8-flash' || rawModel === 'gemini-3.5-flash' || rawModel === 'gemini-3.7-flash' || rawModel === 'pcg-auto-pro' || rawModel === 'gemini-2.5-pro' || rawModel === 'claude-sonnet-5' || rawModel === 'gpt-5.4' || rawModel === 'Standard' || rawModel === 'Pro' || rawModel === 'Expert')) {
-      return rawModel;
-    }
-    return "gemini-3.8-flash";
-  } else {
-    if (rawModel && (rawModel.startsWith('gemini-') || rawModel === 'Standard' || rawModel === 'Pro')) {
-      return rawModel;
-    }
-    return "gemini-3.8-flash";
   }
 }
 
