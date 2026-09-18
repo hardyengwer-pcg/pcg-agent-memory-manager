@@ -14,7 +14,6 @@ import {
   MessageSquare,
   Filter
 } from 'lucide-react';
-import { getAccessToken } from '../auth';
 
 export interface TagItem {
   tag: string;
@@ -49,6 +48,7 @@ export const TagExplorerModal: React.FC<TagExplorerModalProps> = ({
     setIsLoading(true);
     setError(null);
     try {
+      const { getAccessToken } = await import('../auth');
       const token = await getAccessToken();
       const res = await fetch('/api/tags', {
         headers: {
