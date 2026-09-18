@@ -7,7 +7,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import cron from 'node-cron';
 import 'dotenv/config';
-import { appendVerbatimEvidence, searchVerbatimEvidence, type VerbatimEvidenceInput } from './verbatim-evidence-ledger.ts';
+import { searchVerbatimEvidence } from './verbatim-evidence-ledger.ts';
 import { queryTemporalTimeline, upsertTemporalFact, type TemporalFactInput } from './temporal-facts.ts';
 import { recordDecision, searchDecisions, type DecisionRecordInput } from './decision-memory.ts';
 import { createApiAuthMiddleware, validateGoogleToken } from './src/server/api-auth.ts';
@@ -18,6 +18,7 @@ import { fetchTasks } from './src/server/tasks-reader.ts';
 import { getFileContent, listAllFiles } from './src/server/drive-reader.ts';
 import { enrichTimestampTranscriptLinks, fetchDriveKnowledgeBaseContext as readDriveKnowledgeBaseContext } from './src/server/drive-context.ts';
 import { getEffectiveApiConfig, getModelName, isValidApiKey, loadAISettings, normalizeAiBaseUrl, saveAISettings } from './src/server/ai-config.ts';
+import { recordVerbatimEvidence } from './src/server/evidence.ts';
 
 export { fetchTasks };
 
@@ -196,15 +197,6 @@ export function saveCronStatus(statusData: any) {
     fs.writeFileSync(CRON_STATUS_FILE, JSON.stringify(statusData, null, 2), 'utf-8');
   } catch (e) {
     console.error("Error saving cron status:", e);
-  }
-}
-
-function recordVerbatimEvidence(inputs: VerbatimEvidenceInput[]): void {
-  try {
-    const records = appendVerbatimEvidence(inputs);
-    if (records.length > 0) console.log(`[Evidence Ledger] ${records.length} neue unveränderte Quelle(n) gespeichert.`);
-  } catch (error: any) {
-    console.warn('[Evidence Ledger] Speicherung übersprungen:', error?.message || error);
   }
 }
 
