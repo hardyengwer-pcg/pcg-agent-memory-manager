@@ -31,6 +31,7 @@ import { queryTemporalTimeline, upsertTemporalFact } from './temporal-facts.ts';
 import { recordDecision, searchDecisions } from './decision-memory.ts';
 import { runMemoryMcpStdio } from './memory-mcp-server.ts';
 import { captureCurrentBrowserPage, compareBrowserPages } from './browser-mcp.ts';
+import { discoverConfiguredRemoteMcpTools } from './src/server/remote-mcp.ts';
 
 const ROOT = process.cwd();
 const ENV_FILE = path.join(ROOT, '.env');
@@ -503,6 +504,23 @@ async function cmdStatus() {
   console.log('');
 }
 
+async function cmdMcpDiscover() {
+  console.log('\nRemote-MCP-Tool-Discovery (read-only)\n');
+  const results = await discoverConfiguredRemoteMcpTools();
+  for (const [server, tools] of Object.entries(results)) {
+    console.log(`## ${server}`);
+    if ('error' in tools) {
+      console.log(`Fehler: ${tools.error}`);
+      continue;
+    }
+    if (tools.length === 0) {
+      console.log('Keine Tools gemeldet.');
+      continue;
+    }
+    for (const tool of tools) console.log(`- ${tool.name}: ${tool.description || '(keine Beschreibung)'}`);
+  }
+}
+
 async function cmdDaily() {
   const accessToken = await getAccessToken();
   console.log('\nStarte tägliches Update (analyze -> Gemini -> Tasks -> Drive -> E-Mail)...\n');
@@ -786,6 +804,7 @@ PCG Agent CLI – Befehle:
   npm run agent -- decision-record --title "Titel" --decision "Beschluss" --rationale "Grund" [--project "P"] [--alts "A1,A2"] [--owner "O"] [--tags "t1,t2"]
   npm run agent -- decision-search ["Begriff"] [--project "P"] [--tag "t"] [--owner "O"]
   npm run agent -- memory-mcp       Startet den MCP Server (Stdio) für Claude Code / Gemini CLI
+  npm run agent -- mcp-discover     Listet Tools der konfigurierten Remote-MCP-Server (read-only)
 
 Chat-Rückkanal (Google Chat Bot):
   npm run agent -- chat-spaces         Chat-Räume auflisten (Raum-ID für .env)
@@ -823,6 +842,7 @@ async function main() {
       case 'decision-record': return await cmdDecisionRecord(args.slice(1));
       case 'decision-search': return await cmdDecisionSearch(args.slice(1));
       case 'memory-mcp': return await runMemoryMcpStdio();
+      case 'mcp-discover': return await cmdMcpDiscover();
       case 'chat-spaces': return await cmdChatSpaces();
       case 'chat-send': return await cmdChatSend(args.slice(1).join(' '));
       case 'chat-process': return await cmdChatProcess();
