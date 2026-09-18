@@ -11,12 +11,12 @@ export type RemoteMcpTool = {
   inputSchema?: Record<string, unknown>;
 };
 
-const ALLOWED_HOSTS = new Set(['mcp.hubspot.com', 'odoo-mcp.gateway.pcg.io']);
+const ALLOWED_HOSTS = new Set(['odoo-mcp.gateway.pcg.io', 'mcp.atlassian.com']);
 let requestId = 0;
 
 export const DEFAULT_REMOTE_MCP_SERVERS: Record<string, RemoteMcpServerConfig> = {
-  hubspot: { type: 'remote', url: 'https://mcp.hubspot.com', enabled: true },
   'odoo-mcp': { type: 'remote', url: 'https://odoo-mcp.gateway.pcg.io/mcp/', enabled: true },
+  atlassian: { type: 'remote', url: 'https://mcp.atlassian.com/v1/mcp/authv2', enabled: true },
 };
 
 export function parseRemoteMcpServers(raw = process.env.REMOTE_MCP_SERVERS_JSON): Record<string, RemoteMcpServerConfig> {
@@ -118,21 +118,35 @@ function extractToolRecords(result: any): any[] {
 export async function fetchOdooProjectStatusContext() {
   try {
     const config = getConfiguredRemoteMcpServer('odoo-mcp');
+    const projectFieldResult = await callRemoteMcpTool(config, 'get_model_fields', { model: 'project.project' });
+    const taskFieldResult = await callRemoteMcpTool(config, 'get_model_fields', { model: 'project.task' });
+    const availableFields = (result: any) => new Set(extractToolRecords(result).map(field => field.name));
+    const projectFields = availableFields(projectFieldResult);
+    const taskFields = availableFields(taskFieldResult);
+    const selectFields = (available: Set<string>, candidates: string[]) => candidates.filter(field => available.has(field));
+    const projectQueryFields = selectFields(projectFields, ['id', 'name', 'partner_id', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline']);
+    const taskQueryFields = selectFields(taskFields, ['id', 'name', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours']);
     const [projectsResult, tasksResult] = await Promise.all([
       callRemoteMcpTool(config, 'search_records', {
         model: 'project.project',
         domain: [{ field: 'active', operator: '=', value: true }],
-        fields: ['id', 'name', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'],
+        fields: projectQueryFields,
         limit: 100,
       }),
       callRemoteMcpTool(config, 'search_records', {
         model: 'project.task',
         domain: [{ field: 'active', operator: '=', value: true }],
-        fields: ['id', 'name', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'],
+        fields: taskQueryFields,
         limit: 100,
       }),
     ]);
-    const projects = extractToolRecords(projectsResult);
+    const projects = extractToolRecords(projectsResult).map(project => ({
+      ...project,
+      customer: project.partner_id || project.company_id || project.account_id || null,
+      time_left_hours: typeof project.allocated_hours === 'number' && typeof project.effective_hours === 'number'
+        ? Math.max(0, project.allocated_hours - project.effective_hours)
+        : null,
+    }));
     const tasks = extractToolRecords(tasksResult);
     return `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\nProjekte:\n${JSON.stringify(projects, null, 2)}\nOffene/aktive Tasks:\n${JSON.stringify(tasks, null, 2)}\n`;
   } catch (error: any) {
