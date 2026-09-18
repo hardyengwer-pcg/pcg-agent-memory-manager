@@ -2,9 +2,9 @@ import { google } from 'googleapis';
 
 type RecordEvidence = (inputs: any[]) => void;
 
-export async function fetchTasks(auth: any, recordEvidence: RecordEvidence = () => {}) {
+export async function fetchTasks(auth: any, recordEvidence: RecordEvidence = () => {}, createTasksClient = (value: any) => google.tasks({ version: 'v1', auth: value })) {
   try {
-    const tasksApi = google.tasks({ version: 'v1', auth });
+    const tasksApi = createTasksClient(auth);
     const taskLists: any[] = [];
     let listPageToken: string | undefined;
     do {
