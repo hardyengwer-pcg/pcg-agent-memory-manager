@@ -2234,6 +2234,48 @@ export function sanitizeActionProposals(text: string, tasksContext?: string, eve
   return text;
 }
 
+function ensureCriticalProjectTasks(summary: string, sourceContext: string, tasksContext: string, dueDate: string): string {
+  const wireguardTitle = 'HHA: WireGuard-Zugang für Kundeninfrastruktur einrichten';
+  if (!/wireguard/i.test(sourceContext)) {
+    return summary;
+  }
+
+  const taskStates = extractGoogleTaskStates(tasksContext);
+  if (taskStates.open.some(task => areTaskTextsSimilar(wireguardTitle, task))) {
+    return summary;
+  }
+
+  const sourceLine = sourceContext.split('\n').find(line => /wireguard/i.test(line)) || 'Aktueller HHA-Kontext nennt persönliche WireGuard-Keys für den Kundeninfrastrukturzugang.';
+  const sourceUrl = sourceLine.match(/https?:\/\/[^\s|)]+/)?.[0] || 'https://tasks.google.com/';
+  const proposal = {
+    id: 'critical-wireguard',
+    type: 'task',
+    title: wireguardTitle,
+    details: {
+      title: wireguardTitle,
+      notes: `Beim Kunden Hamburger Hochbahn persönlichen WireGuard-Key über Timo Dempwolf einrichten lassen, damit der Zugriff auf GitLab/Kundeninfrastruktur für das HHA AI Gateway möglich ist. Quelle: ${sourceUrl}`,
+      dueDate,
+    },
+  };
+  const actionMatch = summary.match(/<ACTION_PROPOSALS>([\s\S]*?)<\/ACTION_PROPOSALS>/i);
+  if (actionMatch) {
+    const raw = actionMatch[1].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    try {
+      const proposals = JSON.parse(raw);
+      if (Array.isArray(proposals)) {
+        if (proposals.some((proposal: any) => proposal?.type === 'task' && /wireguard|timo\s+dempwolf/i.test(`${proposal.title || ''} ${proposal.details?.title || ''} ${proposal.details?.notes || ''}`))) {
+          return summary;
+        }
+        proposals.push(proposal);
+        return summary.replace(actionMatch[0], `<ACTION_PROPOSALS>\n${JSON.stringify(proposals, null, 2)}\n</ACTION_PROPOSALS>`);
+      }
+    } catch {
+      // Fall through and append a clean proposal block.
+    }
+  }
+  return `${summary.trim()}\n\n<ACTION_PROPOSALS>\n${JSON.stringify([proposal], null, 2)}\n</ACTION_PROPOSALS>`;
+}
+
 function convertMarkdownTablesToCleanText(text: string): string {
   if (!text) return "";
   const lines = text.split(/\r?\n/);
@@ -3226,7 +3268,8 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
 8. Vollständigkeit: Gehe lückenlos alle aktiven, unerledigten Themen durch und synchronisiere sie mit den neuesten Quellen.
   8a. DOPPLUNGSVERBOT: Änderungen ausschließlich in Abschnitt 1, Squad-Lead-Kontrollen ausschließlich in Abschnitt 2, dringende Projektklärungen ausschließlich in Abschnitt 5 und weitere To-dos ausschließlich in Abschnitt 6. Meetings nennen nur Agenda und Vorbereitung. Abschnitt 7 enthält je Projekt nur eine kompakte Statuszeile ohne Wiederholung.
   8b. PRIORITÄT: Dringende Blocker, Entscheidungen, fällige Projektaktionen und konkrete nächste Schritte stehen vor der optionalen Projektstatusübersicht. Die Statusübersicht darf nie zulasten dieser Hinweise ausführlich werden.
- 8c. TODO-SYNCHRONISATION: Jede konkrete Aktion in Abschnitt 5 oder 6 muss als task in ACTION_PROPOSALS gespiegelt werden. Jede solche task-Aktion braucht ein sinnvolles dueDate im Format YYYY-MM-DD; offene Projektaktionen ohne Enddatum sind nicht zulässig.
+  8c. TODO-SYNCHRONISATION: Jede konkrete Aktion in Abschnitt 5 oder 6 muss als task in ACTION_PROPOSALS gespiegelt werden. Jede solche task-Aktion braucht ein sinnvolles dueDate im Format YYYY-MM-DD; offene Projektaktionen ohne Enddatum sind nicht zulässig.
+  8e. EXPLIZITE BENUTZERBITTEN: Wenn Hardy in Chat, Mail oder Meeting ausdrücklich sagt, dass er sich um einen konkreten Kundenblocker oder Zugang kümmern will (z. B. WireGuard-Zugang für HHA), muss daraus zwingend ein eigener Google-Task mit Owner Hardy, konkreter nächster Aktion und Fälligkeitsdatum entstehen. Ein bloßer Hinweis in Abschnitt 1 reicht nicht.
   8d. E-MAIL-AUSGANG & FOLLOW-UP: Prüfe im E-Mail-Kontext ausdrücklich Nachrichten mit Status GESENDET. Wenn Hardy eine relevante Projekt-, Schätzungs-, Scope- oder Übergabemail gesendet hat und noch keine Antwort vorliegt, erstelle ein Nachhaken als Task mit Empfänger, Betreff, ursprünglichem Anliegen und gewünschter Antwort. Bei einer Abwesenheitsmeldung richte das dueDate auf den ersten oder zweiten Arbeitstag nach dem genannten Rückkehrdatum; ohne Rückkehrdatum auf 7–10 Tage nach Versand. Keine Follow-up-Aufgabe erzeugen, wenn bereits eine Antwort vorliegt oder ein gleichwertiger offener Google Task existiert.
 9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
 10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden.
@@ -3249,10 +3292,16 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     }
   });
 
-  const summary = validateDailyBriefingStructure(sanitizeCurrentSquadCapacityClaims(
+  let summary = validateDailyBriefingStructure(sanitizeCurrentSquadCapacityClaims(
     sanitizeActionProposals(response.text || "Kein Update generiert.", tasksContext, eventsContext),
     currentSquadSignals,
   ));
+  summary = ensureCriticalProjectTasks(
+    summary,
+    `${enrichedDriveContext}\n${emailsContext}\n${chatsContext}`,
+    tasksContext,
+    dateStr,
+  );
 
   try {
     if (process.env.ENABLE_DAILY_MEMORY_CURATION === 'true') {
