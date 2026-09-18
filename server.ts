@@ -14,6 +14,9 @@ import { createApiAuthMiddleware, validateGoogleToken } from './src/server/api-a
 import { fetchUpcomingEvents } from './src/server/calendar-reader.ts';
 import { fetchRecentChats } from './src/server/chat-reader.ts';
 import { fetchRecentEmails } from './src/server/gmail-reader.ts';
+import { fetchTasks } from './src/server/tasks-reader.ts';
+
+export { fetchTasks };
 
 export { fetchRecentEmails };
 
@@ -924,7 +927,7 @@ async function fetchRecentEmailsLegacy(auth: any) {
   }
 }
 
-export async function fetchTasks(auth: any) {
+async function fetchTasksLegacy(auth: any) {
   try {
     const tasksApi = google.tasks({ version: 'v1', auth });
     const taskLists: any[] = [];
@@ -2756,7 +2759,7 @@ app.post('/api/agent/chat', async (req, res) => {
     const emailsContext = await fetchRecentEmails(oauth2Client, recordVerbatimEvidence);
     const eventsContext = await fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence);
     const chatsContext = await fetchRecentChats(oauth2Client, recordVerbatimEvidence);
-    const tasksContext = await fetchTasks(oauth2Client);
+    const tasksContext = await fetchTasks(oauth2Client, recordVerbatimEvidence);
     const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
     const localMemoryContext = loadLocalMemoryContext();
     const skillContext = loadSkillContext([
@@ -3019,7 +3022,7 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
     fetchRecentEmails(oauth2Client, recordVerbatimEvidence),
     fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence),
     fetchRecentChats(oauth2Client, recordVerbatimEvidence),
-    fetchTasks(oauth2Client)
+    fetchTasks(oauth2Client, recordVerbatimEvidence)
   ]);
   const enrichedDriveContext = enrichTimestampTranscriptLinks(driveContext, eventsContext);
   const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
@@ -3211,7 +3214,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
       try {
         // Re-read Tasks after generation so manually-created or concurrently-created
         // tasks cannot slip through the earlier snapshot-based sanitization.
-        const latestTaskStates = extractGoogleTaskStates(await fetchTasks(oauth2Client));
+        const latestTaskStates = extractGoogleTaskStates(await fetchTasks(oauth2Client, recordVerbatimEvidence));
         const createdTitles: string[] = [];
         let jsonStr = proposalsMatch[1].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim().replace(/,\s*([\]}])/g, '$1');
         const proposals = JSON.parse(jsonStr);
@@ -3363,7 +3366,7 @@ app.get('/api/tags', async (req, res) => {
   try {
     const oauth2Client = getOAuth2Client(token);
     const driveContext = await fetchDriveKnowledgeBaseContext(token);
-    const tasksContext = await fetchTasks(oauth2Client);
+    const tasksContext = await fetchTasks(oauth2Client, recordVerbatimEvidence);
     const eventsContext = await fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence);
     const emailsContext = await fetchRecentEmails(oauth2Client, recordVerbatimEvidence);
     const cronStatus = getCronStatus();
