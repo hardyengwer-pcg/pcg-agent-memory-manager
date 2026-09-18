@@ -2,9 +2,9 @@ import { google } from 'googleapis';
 
 type RecordEvidence = (inputs: any[]) => void;
 
-export async function fetchUpcomingEvents(auth: any, recordEvidence: RecordEvidence) {
+export async function fetchUpcomingEvents(auth: any, recordEvidence: RecordEvidence, createCalendarClient = (value: any) => google.calendar({ version: 'v3', auth: value })) {
   try {
-    const calendar = google.calendar({ version: 'v3', auth });
+    const calendar = createCalendarClient(auth);
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const fourteenDaysAhead = new Date();
