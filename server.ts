@@ -10,7 +10,7 @@ import 'dotenv/config';
 import { appendVerbatimEvidence, searchVerbatimEvidence, type VerbatimEvidenceInput } from './verbatim-evidence-ledger.ts';
 import { queryTemporalTimeline, upsertTemporalFact, type TemporalFactInput } from './temporal-facts.ts';
 import { recordDecision, searchDecisions, type DecisionRecordInput } from './decision-memory.ts';
-import { createApiAuthMiddleware } from './src/server/api-auth.ts';
+import { createApiAuthMiddleware, validateGoogleToken } from './src/server/api-auth.ts';
 
 const app = express();
 const PORT = 3000;
@@ -38,9 +38,7 @@ function validateTextField(value: unknown, field: string, maxLength: number, req
 }
 
 app.use('/api', createApiAuthMiddleware({
-  getOAuth2Client,
-  isAuthError,
-  clearStoredToken,
+  validateGoogleToken: (token) => validateGoogleToken(token, getOAuth2Client),
 }));
 
 const TOKEN_FILE = path.join(process.cwd(), '.latest_token.json');

@@ -3,18 +3,10 @@ import { google } from 'googleapis';
 import 'dotenv/config';
 
 type AuthDependencies = {
-  getOAuth2Client: (accessToken: string) => any;
-  isAuthError: (error: any) => boolean;
-  clearStoredToken: () => void;
+  validateGoogleToken: (accessToken: string) => Promise<void>;
 };
 
-export function createApiAuthMiddleware({
-  getOAuth2Client,
-  isAuthError,
-  clearStoredToken,
-}: AuthDependencies) {
-  const allowedGoogleEmail = process.env.GOOGLE_ALLOWED_EMAIL?.trim().toLowerCase();
-
+export function createApiAuthMiddleware({ validateGoogleToken }: AuthDependencies) {
   return async function authenticateApiRequest(req: Request, res: Response, next: NextFunction) {
     // The settings read only exposes a masked key, model and base URL.
     if (req.method === 'GET' && req.path === '/ai-settings') return next();
@@ -29,27 +21,37 @@ export function createApiAuthMiddleware({
     }
 
     try {
-      const tasksApi = google.tasks({ version: 'v1', auth: getOAuth2Client(token) });
-      await tasksApi.tasklists.list({ maxResults: 1 });
-
-      if (!allowedGoogleEmail) {
-        return res.status(503).json({ error: 'GOOGLE_ALLOWED_EMAIL ist nicht konfiguriert.' });
-      }
-      const oauth2 = google.oauth2({ version: 'v2', auth: getOAuth2Client(token) });
-      const userInfo = await oauth2.userinfo.get();
-      if (userInfo.data.email?.toLowerCase() !== allowedGoogleEmail) {
-        return res.status(403).json({ error: 'Dieses Google-Konto ist nicht für den Agenten freigegeben.' });
-      }
-
+      await validateGoogleToken(token);
       (req as any).googleToken = token;
       return next();
     } catch (error: any) {
-      if (isAuthError(error)) {
-        clearStoredToken();
+      const status = error?.status || error?.code;
+      if (status === 403 && !/insufficient|credential|token|auth|access/i.test(error?.message || '')) {
+        return res.status(403).json({ error: 'Dieses Google-Konto ist nicht für den Agenten freigegeben.' });
+      }
+      if (status === 401 || error?.message === 'AUTH_FAILED' || (status === 403 && /insufficient|credential|token|auth|access/i.test(error?.message || ''))) {
         return res.status(401).json({ error: 'Google API-Authentifizierung abgelaufen. Bitte neu anmelden.' });
       }
       console.warn('Google token validation failed:', error?.message || error);
       return res.status(503).json({ error: 'Google-Token konnte derzeit nicht validiert werden.' });
     }
   };
+}
+
+export async function validateGoogleToken(token: string, getOAuth2Client: (accessToken: string) => any) {
+  const allowedGoogleEmail = process.env.GOOGLE_ALLOWED_EMAIL?.trim().toLowerCase();
+  const tasksApi = google.tasks({ version: 'v1', auth: getOAuth2Client(token) });
+  await tasksApi.tasklists.list({ maxResults: 1 });
+  if (!allowedGoogleEmail) {
+    const error: any = new Error('GOOGLE_ALLOWED_EMAIL ist nicht konfiguriert.');
+    error.status = 503;
+    throw error;
+  }
+  const oauth2 = google.oauth2({ version: 'v2', auth: getOAuth2Client(token) });
+  const userInfo = await oauth2.userinfo.get();
+  if (userInfo.data.email?.toLowerCase() !== allowedGoogleEmail) {
+    const error: any = new Error('ACCOUNT_NOT_ALLOWED');
+    error.status = 403;
+    throw error;
+  }
 }
