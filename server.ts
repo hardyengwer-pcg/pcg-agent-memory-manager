@@ -38,8 +38,9 @@ function validateTextField(value: unknown, field: string, maxLength: number, req
 
 const allowedGoogleEmail = process.env.GOOGLE_ALLOWED_EMAIL?.trim().toLowerCase();
 
-app.use('/api', async (req, res, next) => {
-  if (req.method === 'GET' && req.path === '/api/ai-settings') return next();
+async function authenticateApiRequest(req: express.Request, res: express.Response, next: express.NextFunction) {
+  // The settings read only exposes a masked key, model and base URL.
+  if (req.method === 'GET' && req.path === '/ai-settings') return next();
 
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -73,7 +74,9 @@ app.use('/api', async (req, res, next) => {
     console.warn('Google token validation failed:', err?.message || err);
     return res.status(503).json({ error: 'Google-Token konnte derzeit nicht validiert werden.' });
   }
-});
+}
+
+app.use('/api', authenticateApiRequest);
 
 const TOKEN_FILE = path.join(process.cwd(), '.latest_token.json');
 const CRON_STATUS_FILE = path.join(process.cwd(), '.last_cron_status.json');
@@ -2631,11 +2634,7 @@ app.post('/api/chat/create-tasks', async (req, res) => {
 });
 
 app.post('/api/actions/email', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: "Nicht authentifiziert" });
-  }
-  const token = authHeader.split(' ')[1];
+  const token = (req as any).googleToken;
   try {
     const oauth2Client = getOAuth2Client(token);
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
@@ -2696,11 +2695,7 @@ app.post('/api/actions/email', async (req, res) => {
 });
 
 app.post('/api/actions/calendar', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: "Nicht authentifiziert" });
-  }
-  const token = authHeader.split(' ')[1];
+  const token = (req as any).googleToken;
   try {
     const oauth2Client = getOAuth2Client(token);
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
@@ -2739,11 +2734,7 @@ app.post('/api/actions/calendar', async (req, res) => {
 });
 
 app.post('/api/actions/chat', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: "Nicht authentifiziert" });
-  }
-  const token = authHeader.split(' ')[1];
+  const token = (req as any).googleToken;
   try {
     const oauth2Client = getOAuth2Client(token);
     const chat = google.chat({ version: 'v1', auth: oauth2Client });
@@ -2786,11 +2777,7 @@ app.post('/api/actions/chat', async (req, res) => {
 });
 
 app.post('/api/actions/drive', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: "Nicht authentifiziert" });
-  }
-  const token = authHeader.split(' ')[1];
+  const token = (req as any).googleToken;
   try {
     const drive = await getDriveClient(token);
     const { fileName = `Notiz_${new Date().toISOString().split('T')[0]}.md`, content } = req.body;
