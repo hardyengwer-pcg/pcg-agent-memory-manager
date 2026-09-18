@@ -20,6 +20,7 @@ import { enrichTimestampTranscriptLinks, fetchDriveKnowledgeBaseContext as readD
 import { getEffectiveApiConfig, getModelName, isValidApiKey, loadAISettings, normalizeAiBaseUrl, saveAISettings } from './src/server/ai-config.ts';
 import { recordVerbatimEvidence } from './src/server/evidence.ts';
 import { validateTextField } from './src/server/input-validation.ts';
+import { fetchOdooProjectStatusContext } from './src/server/remote-mcp.ts';
 
 export { fetchTasks };
 
@@ -2366,13 +2367,15 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
     emailsContext,
     eventsContext,
     chatsContext,
-    tasksContext
+    tasksContext,
+    odooContext
   ] = await Promise.all([
     fetchDriveContext(accessToken),
     fetchRecentEmails(oauth2Client, recordVerbatimEvidence),
     fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence),
     fetchRecentChats(oauth2Client, recordVerbatimEvidence),
-    fetchTasks(oauth2Client, recordVerbatimEvidence)
+    fetchTasks(oauth2Client, recordVerbatimEvidence),
+    fetchOdooProjectStatusContext()
   ]);
   const enrichedDriveContext = enrichTimestampTranscriptLinks(driveContext, eventsContext);
   const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
@@ -2475,6 +2478,9 @@ ${projectCapacityEvidence}
 --- TO-DOS ---
 ${tasksContext}
 
+--- ODOO PROJEKT- UND ZEITERFASSUNGSKONTEXT (READ-ONLY) ---
+${odooContext}
+
 ${davidAgendaContext}
 
 --- LOKALES MEMORY / EXPLIZITE NUTZERKORREKTUREN (nur aktuelle Korrekturen; alte Auslastungsfakten nicht wiederverwenden) ---
@@ -2505,7 +2511,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
   8f. TASK-ABGLEICH: Offene konkrete Aktionen aus Abschnitt 5 und 6 müssen in Google Tasks erscheinen. Erledigte Google Tasks und explizit abgeschlossene Aktionen dürfen weder im Bericht als offene nächste Schritte erscheinen noch erneut angelegt werden. Wenn eine Aktion heute fällig oder überfällig ist, verwende heute (${dateStr}) als Fälligkeitsdatum, sofern keine neue realistische Frist belegt ist.
   8d. E-MAIL-AUSGANG & FOLLOW-UP: Prüfe im E-Mail-Kontext ausdrücklich Nachrichten mit Status GESENDET. Wenn Hardy eine relevante Projekt-, Schätzungs-, Scope- oder Übergabemail gesendet hat und noch keine Antwort vorliegt, erstelle ein Nachhaken als Task mit Empfänger, Betreff, ursprünglichem Anliegen und gewünschter Antwort. Bei einer Abwesenheitsmeldung richte das dueDate auf den ersten oder zweiten Arbeitstag nach dem genannten Rückkehrdatum; ohne Rückkehrdatum auf 7–10 Tage nach Versand. Keine Follow-up-Aufgabe erzeugen, wenn bereits eine Antwort vorliegt oder ein gleichwertiger offener Google Task existiert.
 9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
-10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden.
+  10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Ergänze den Odoo-Read-only-Kontext mit aktuellem Projektstatus, aktiven Tasks, geplanten/effektiven Stunden, Überstundenstatus und nächsten Aktivitäten. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden. Odoo-Daten sind Faktenquelle, aber nie eine automatische Schreibanweisung.
 10. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!
 11. Abgeschlossene Aufgaben: Alle mit [ERLEDIGT] markierten oder im lokalen Memory explizit abgeschlossenen Einzelaufgaben dürfen nie erneut vorgeschlagen werden. Projekte nicht pauschal abschliessen; offene Google Tasks desselben Projekts bleiben gültig.
 12. Ignorierte Termine: "Thursdays for Data" ist intern und wird immer still ignoriert. KEINEN Abschnitt "Ignorierte interne Termine" erstellen!

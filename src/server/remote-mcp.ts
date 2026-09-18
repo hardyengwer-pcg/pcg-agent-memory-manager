@@ -41,18 +41,21 @@ function parseMcpResponse(response: Response): Promise<any> {
   });
 }
 
-export async function discoverRemoteMcpTools(config: RemoteMcpServerConfig, fetchImpl: typeof fetch = fetch): Promise<RemoteMcpTool[]> {
-  if (!config.enabled) return [];
+async function initializeRemoteMcp(config: RemoteMcpServerConfig, fetchImpl: typeof fetch) {
   const headers = { Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json', ...(config.headers || {}) };
-  const initialize = await fetchImpl(config.url, {
+  const response = await fetchImpl(config.url, {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', id: ++requestId, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pcg-memory-manager', version: '1.0.0' } } }),
   });
-  if (!initialize.ok) throw new Error(`MCP initialize fehlgeschlagen (${initialize.status}).`);
-  const initData = await parseMcpResponse(initialize);
-  const sessionId = initialize.headers.get('mcp-session-id');
-  const toolHeaders = sessionId ? { ...headers, 'Mcp-Session-Id': sessionId } : headers;
+  if (!response.ok) throw new Error(`MCP initialize fehlgeschlagen (${response.status}).`);
+  await parseMcpResponse(response);
+  return { headers: response.headers.get('mcp-session-id') ? { ...headers, 'Mcp-Session-Id': response.headers.get('mcp-session-id')! } : headers };
+}
+
+export async function discoverRemoteMcpTools(config: RemoteMcpServerConfig, fetchImpl: typeof fetch = fetch): Promise<RemoteMcpTool[]> {
+  if (!config.enabled) return [];
+  const { headers: toolHeaders } = await initializeRemoteMcp(config, fetchImpl);
   const toolsResponse = await fetchImpl(config.url, {
     method: 'POST',
     headers: toolHeaders,
@@ -60,7 +63,21 @@ export async function discoverRemoteMcpTools(config: RemoteMcpServerConfig, fetc
   });
   if (!toolsResponse.ok) throw new Error(`MCP tools/list fehlgeschlagen (${toolsResponse.status}).`);
   const toolsData = await parseMcpResponse(toolsResponse);
-  return (toolsData.result?.tools || initData.result?.tools || []) as RemoteMcpTool[];
+  return (toolsData.result?.tools || []) as RemoteMcpTool[];
+}
+
+export async function callRemoteMcpTool(config: RemoteMcpServerConfig, name: string, args: Record<string, unknown> = {}, fetchImpl: typeof fetch = fetch) {
+  if (!config.enabled) throw new Error('Remote-MCP-Server ist deaktiviert.');
+  const { headers } = await initializeRemoteMcp(config, fetchImpl);
+  const response = await fetchImpl(config.url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name, arguments: args } }),
+  });
+  if (!response.ok) throw new Error(`MCP tools/call fehlgeschlagen (${response.status}).`);
+  const data = await parseMcpResponse(response);
+  if (data.error) throw new Error(data.error.message || 'Remote-MCP-Tool fehlgeschlagen.');
+  return data.result;
 }
 
 export async function discoverConfiguredRemoteMcpTools(fetchImpl: typeof fetch = fetch) {
@@ -84,5 +101,58 @@ export async function discoverConfiguredRemoteMcpTools(fetchImpl: typeof fetch =
     }
   }
   return results;
+}
+
+function extractToolRecords(result: any): any[] {
+  if (Array.isArray(result?.structuredContent?.records)) return result.structuredContent.records;
+  const text = result?.content?.find((item: any) => item.type === 'text')?.text;
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed.records) ? parsed.records : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchOdooProjectStatusContext() {
+  try {
+    const config = getConfiguredRemoteMcpServer('odoo-mcp');
+    const [projectsResult, tasksResult] = await Promise.all([
+      callRemoteMcpTool(config, 'search_records', {
+        model: 'project.project',
+        domain: [{ field: 'active', operator: '=', value: true }],
+        fields: ['id', 'name', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'],
+        limit: 100,
+      }),
+      callRemoteMcpTool(config, 'search_records', {
+        model: 'project.task',
+        domain: [{ field: 'active', operator: '=', value: true }],
+        fields: ['id', 'name', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'],
+        limit: 100,
+      }),
+    ]);
+    const projects = extractToolRecords(projectsResult);
+    const tasks = extractToolRecords(tasksResult);
+    return `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\nProjekte:\n${JSON.stringify(projects, null, 2)}\nOffene/aktive Tasks:\n${JSON.stringify(tasks, null, 2)}\n`;
+  } catch (error: any) {
+    console.warn('Odoo MCP project context notice:', error?.message || error);
+    return '(Odoo-MCP-Projektkontext nicht verfügbar; keine Odoo-Fakten ableiten.)\n';
+  }
+}
+
+export function getConfiguredRemoteMcpServer(name: string): RemoteMcpServerConfig {
+  const config = parseRemoteMcpServers()[name];
+  if (!config) throw new Error(`Kein Remote-MCP-Server '${name}' konfiguriert.`);
+  const effectiveConfig = { ...config };
+  if (name === 'odoo-mcp' && !effectiveConfig.headers) {
+    try {
+      const token = JSON.parse(fs.readFileSync('.odoo-mcp-token.json', 'utf8')).access_token;
+      if (token) effectiveConfig.headers = { Authorization: `Bearer ${token}` };
+    } catch {
+      // The remote server will return 401 until authentication is completed.
+    }
+  }
+  return effectiveConfig;
 }
 import fs from 'node:fs';
