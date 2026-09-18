@@ -74,6 +74,7 @@ npm start
 cli.ts              Headless CLI und OAuth-Flow
 server.ts           Express-API, Google-Integrationen, Briefing-Logik
 src/                React-Weboberflaeche
+src/server/         Modularisierte Auth- und Workspace-Reader
 docs/               Architektur, Betrieb und Entwicklungsnotizen
 run-agent.cmd       Windows-Wrapper fuer geplante Ausfuehrungen
 ```

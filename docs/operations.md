@@ -32,7 +32,7 @@ Der erste Befehl oeffnet einmalig einen Browser. Danach arbeitet die CLI mit dem
 npm run agent -- daily
 ```
 
-Der Lauf sammelt Workspace-Kontext, speichert Rohquellen unverändert im Evidence Ledger, erstellt ein 6-teiliges Management-Briefing (Reihenfolge: 1. Änderungen, 2. Squad Lead Control, 3. Meetings, 4. Projektstatus, 5. Ausblick, 6. Handlungsempfehlungen), synchronisiert es nach Drive, sendet eine Zusammenfassung per E-Mail und postet das Briefing in den Google-Chat-Raum.
+Der Lauf sammelt Workspace-Kontext, speichert Rohquellen unverändert im Evidence Ledger, erstellt ein 7-teiliges Management-Briefing (Änderungen, Squad Lead Control, Meetings, Ausblick, dringende Klärungen, weitere nächste Schritte, kompakte Projektstatusübersicht), synchronisiert es nach Drive, sendet eine Zusammenfassung per E-Mail und postet das Briefing in den Google-Chat-Raum.
 
 Vor der Analyse synchronisiert der Lauf die strukturierten OKF-Dateien aus dem lokalen `agent-memory/`-Ordner (inklusive Unterordner) in den konfigurierten Drive-Memory-Ordner. Diese Dateien bleiben die autoritative lokale Quelle; Token- und Geheimdateien werden nicht synchronisiert.
 

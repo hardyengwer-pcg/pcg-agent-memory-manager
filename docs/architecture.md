@@ -5,7 +5,14 @@
 | Komponente | Aufgabe |
 | --- | --- |
 | `src/` | React-UI mit Firebase Google Sign-In |
-| `server.ts` | Lokale Express-API, Google Workspace, AI-Generierung und Briefing-Logik |
+| `server.ts` | Lokale Express-API, Orchestrierung, AI-Generierung und Briefing-Logik |
+| `src/server/api-auth.ts` | Zentrale Google-Token- und Konto-Authentifizierung |
+| `src/server/calendar-reader.ts` | Kalender-Kontext und Meeting-Evidence |
+| `src/server/chat-reader.ts` | Google-Chat-Kontext und Chat-Evidence |
+| `src/server/gmail-reader.ts` | Gmail-Kontext, Ausgangsmails und Follow-up-Evidence |
+| `src/server/tasks-reader.ts` | Autoritative offene/erledigte Google Tasks |
+| `src/server/drive-reader.ts` | Drive-Dateilisting und Datei-Exporte |
+| `src/server/drive-context.ts` | Drive-Kontextauswahl, Relevanzfilter und Memory-Kontext |
 | `cli.ts` | Headless-Kommandos und OAuth-Refresh-Token-Verwaltung |
 | `verbatim-evidence-ledger.ts` | Unveränderlicher Rohquellen-Ledger mit SHA-256 Hashes, Zeitstempeln und Hybridsuche |
 | `temporal-facts.ts` | Temporales Faktenmodell mit Gültigkeitsfenstern und automatischer Invalidierung |
@@ -19,7 +26,7 @@
 2. Die lokale API validiert Token und Kontoinhaber gegen `GOOGLE_ALLOWED_EMAIL`.
 3. Workspace-Rohdaten (Drive, Gmail, Chat, Kalender, Tasks) werden unverändert im lokalen **Verbatim Evidence Ledger** (`.evidence-ledger/evidence.jsonl`) mit SHA-256 Hash und Versionierung archiviert.
 4. Der Kontext geht an das konfigurierte AI-Modell (Google Gemini oder freigegebenes Gateway).
-5. Das tägliche Management-Briefing folgt einer festen 6-stufigen Struktur mit strikter Validierung (Änderungen & Squad Control oben, keine Dopplungen).
+5. Das tägliche Management-Briefing folgt einer festen 7-stufigen Struktur mit strikter Validierung (dringende Aktionen vor kompakter Projektstatusübersicht, keine Dopplungen).
 6. Die UI zeigt Vorschlaege. Seiteneffekte wie E-Mails, Kalendertermine oder Tasks erfordern eine explizite Aktion in der UI oder im Daily-Lauf.
 
 ## Ausfuehrungsmodi
