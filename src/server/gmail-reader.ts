@@ -2,9 +2,9 @@ import { google } from 'googleapis';
 
 type RecordEvidence = (inputs: any[]) => void;
 
-export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidence) {
+export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidence, createGmailClient = (value: any) => google.gmail({ version: 'v1', auth: value })) {
   try {
-    const gmail = google.gmail({ version: 'v1', auth });
+    const gmail = createGmailClient(auth);
     const res = await gmail.users.messages.list({ userId: 'me', q: 'newer_than:45d -in:trash -in:spam', maxResults: 60, includeSpamTrash: false });
     const messages = res.data.messages || [];
     let targetedMessages: any[] = [];
