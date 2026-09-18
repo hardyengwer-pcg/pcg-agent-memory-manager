@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { detectStructuredMemoryChanges, extractDavidOneOnOneAgenda, extractProjectCapacityEvidence, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals, sanitizeCurrentSquadCapacityClaims, validateDailyBriefingStructure } from '../server.ts';
+import { detectStructuredMemoryChanges, ensureActionSectionTasks, extractDavidOneOnOneAgenda, extractProjectCapacityEvidence, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals, sanitizeCurrentSquadCapacityClaims, validateDailyBriefingStructure } from '../server.ts';
 
 const tasksContext = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
 OFFEN:
@@ -120,6 +120,17 @@ test('repairs an orphaned project status from its source link', () => {
   const result = validateDailyBriefingStructure(`# ☀️ Tägliches Management-Update\n\n## 1. [ÄNDERUNG] Projekt- und Kapazitätsänderungen\n\n## 2. Squad Lead Control\n\n## 3. 🚨 Proaktive Kunden- & Meeting-Vorbereitung\n\n## 4. 🔮 Vorausschau & Wochenausblick\n\n## 5. 🚨 Dringende Klärungen & Projekt-To-dos\n\n## 6. 💡 Weitere nächste Schritte\n\n## 7. 📋 Kompakte Projektstatusübersicht\n\n- **VOEST Alpine**\n  • **Status:** On Track\n\n  • **Status:** In Klärung\n  • [Quelle: Google Drive – "projects/lorenz-snack-world.md"](https://example.test/lorenz)`);
 
   assert.match(result, /- \*\*Lorenz Snack World\*\*\n  • \*\*Status:\*\* In Klärung/);
+});
+
+test('mirrors concrete section actions into dated task proposals without reactivating completed tasks', () => {
+  const summary = `# Daily\n\n## 5. 🚨 Dringende Klärungen & Projekt-To-dos\n- **WireGuard-Zugang HHA einrichten** — Fälligkeit: 2026-09-18\n  • **Details:** Public Keys an Timo senden\n\n## 6. 💡 Weitere nächste Schritte\n- **Alte Aufgabe nicht reaktivieren** — Fälligkeit: 2026-09-18\n\n<ACTION_PROPOSALS>\n[]\n</ACTION_PROPOSALS>`;
+  const tasks = `OFFEN:\n- [OFFEN] Bereits offener Punkt | Liste: My Tasks\nERLEDIGT:\n- [ERLEDIGT] Alte Aufgabe nicht reaktivieren | Liste: My Tasks`;
+
+  const result = ensureActionSectionTasks(summary, tasks, '2026-09-18');
+
+  assert.match(result, /WireGuard-Zugang HHA einrichten/);
+  assert.match(result, /"dueDate": "2026-09-18"/);
+  assert.doesNotMatch(result, /"title": "Alte Aufgabe nicht reaktivieren"/);
 });
 
 test('removes completed task from recommendations and proposals', () => {

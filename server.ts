@@ -1496,7 +1496,7 @@ function ensureCriticalProjectTasks(summary: string, sourceContext: string, task
   return `${summary.trim()}\n\n<ACTION_PROPOSALS>\n${JSON.stringify([proposal], null, 2)}\n</ACTION_PROPOSALS>`;
 }
 
-function ensureActionSectionTasks(summary: string, tasksContext: string, fallbackDueDate: string): string {
+export function ensureActionSectionTasks(summary: string, tasksContext: string, fallbackDueDate: string): string {
   const taskStates = extractGoogleTaskStates(tasksContext);
   const actionMatch = summary.match(/<ACTION_PROPOSALS>([\s\S]*?)<\/ACTION_PROPOSALS>/i);
   let proposals: any[] = [];
