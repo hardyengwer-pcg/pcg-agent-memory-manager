@@ -99,6 +99,9 @@ Details: [SECURITY.md](SECURITY.md).
 ## Qualitaetssicherung
 
 ```bash
+npm run check
+
+# Einzelne Checks
 npm run lint
 npm run build
 npm audit
