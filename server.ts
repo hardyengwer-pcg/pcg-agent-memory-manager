@@ -15,6 +15,7 @@ import { fetchUpcomingEvents } from './src/server/calendar-reader.ts';
 import { fetchRecentChats } from './src/server/chat-reader.ts';
 import { fetchRecentEmails } from './src/server/gmail-reader.ts';
 import { fetchTasks } from './src/server/tasks-reader.ts';
+import { getFileContent, listAllFiles } from './src/server/drive-reader.ts';
 
 export { fetchTasks };
 
@@ -1030,7 +1031,7 @@ export function extractDavidOneOnOneAgenda(tasksContext?: string): string {
 }
 
 // Function to recursively list files in the knowledge base folder
-async function listAllFiles(drive: any, folderId: string, pathPrefix = '') {
+async function listAllFilesLegacy(drive: any, folderId: string, pathPrefix = '') {
   let files: any[] = [];
   try {
     const res = await drive.files.list({
@@ -1040,7 +1041,7 @@ async function listAllFiles(drive: any, folderId: string, pathPrefix = '') {
     
     for (const file of res.data.files || []) {
       if (file.mimeType === 'application/vnd.google-apps.folder') {
-        const subFiles = await listAllFiles(drive, file.id, `${pathPrefix}${file.name}/`);
+        const subFiles = await listAllFilesLegacy(drive, file.id, `${pathPrefix}${file.name}/`);
         files = files.concat(subFiles);
       } else {
         files.push({ ...file, path: `${pathPrefix}${file.name}` });
@@ -1052,7 +1053,7 @@ async function listAllFiles(drive: any, folderId: string, pathPrefix = '') {
   return files;
 }
 
-async function getFileContent(drive: any, fileId: string, mimeType: string) {
+async function getFileContentLegacy(drive: any, fileId: string, mimeType: string) {
   try {
     const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout reading file')), 12000));
     const downloadPromise = (async () => {
