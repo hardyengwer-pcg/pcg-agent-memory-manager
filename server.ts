@@ -12,6 +12,9 @@ import { queryTemporalTimeline, upsertTemporalFact, type TemporalFactInput } fro
 import { recordDecision, searchDecisions, type DecisionRecordInput } from './decision-memory.ts';
 import { createApiAuthMiddleware, validateGoogleToken } from './src/server/api-auth.ts';
 import { fetchUpcomingEvents } from './src/server/calendar-reader.ts';
+import { fetchRecentChats } from './src/server/chat-reader.ts';
+
+export { fetchRecentChats };
 
 export { fetchUpcomingEvents };
 
@@ -915,53 +918,6 @@ export async function fetchRecentEmails(auth: any) {
   } catch (e: any) {
     console.warn("Gmail fetch notice:", e?.message || e);
     return "(E-Mails konnten nicht abgerufen werden)\n";
-  }
-}
-
-export async function fetchRecentChats(auth: any) {
-  try {
-    const chat = google.chat({ version: 'v1', auth });
-    const res = await chat.spaces.list({
-      pageSize: 50,
-    });
-    const spaces = res.data.spaces || [];
-    let chatContext = "Aktuelle Chat-Räume & Nachrichten:\n";
-    for (const space of spaces) {
-      if (!space.name) continue;
-      const spaceLabel = space.displayName ? `Raum: "${space.displayName}"` : `Raum: ${space.name}`;
-      const chatUrl = space.name ? `https://chat.google.com/room/${space.name.replace('spaces/', '')}` : 'https://chat.google.com/';
-      chatContext += `- ${spaceLabel} | Direktlink: ${chatUrl}\n`;
-      try {
-        const msgsRes = await chat.spaces.messages.list({
-          parent: space.name,
-          pageSize: 25,
-          orderBy: 'createTime desc'
-        });
-        const msgs = msgsRes.data.messages || [];
-        for (const msg of msgs) {
-          const sender = msg.sender?.displayName || msg.sender?.name || 'User';
-          const text = msg.text || '(Kein Text)';
-          const timeStr = msg.createTime ? ` [${new Date(msg.createTime).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}]` : '';
-          recordVerbatimEvidence([{
-            sourceType: 'chat',
-            sourceId: msg.name || `${space.name}:${msg.createTime}:${sender}`,
-            content: JSON.stringify(msg),
-            sourceTimestamp: msg.createTime,
-            author: sender,
-            sourceUrl: chatUrl,
-            parentId: space.name,
-            metadata: { spaceName: space.name, spaceLabel },
-          }]);
-          chatContext += `   * ${sender}${timeStr}: "${text.replace(/\n+/g, ' ')}"\n`;
-        }
-      } catch (msgErr: any) {
-        // message list read scope might be restricted or empty, ignore
-      }
-    }
-    return chatContext;
-  } catch (e: any) {
-    console.warn("Chat fetch notice:", e?.message || e);
-    return "(Chats konnten nicht abgerufen werden - Berechtigung oder Dienst inaktiv)\n";
   }
 }
 
@@ -2796,7 +2752,7 @@ app.post('/api/agent/chat', async (req, res) => {
     const contextData = await fetchDriveKnowledgeBaseContext(accessToken);
     const emailsContext = await fetchRecentEmails(oauth2Client);
     const eventsContext = await fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence);
-    const chatsContext = await fetchRecentChats(oauth2Client);
+    const chatsContext = await fetchRecentChats(oauth2Client, recordVerbatimEvidence);
     const tasksContext = await fetchTasks(oauth2Client);
     const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
     const localMemoryContext = loadLocalMemoryContext();
@@ -3059,7 +3015,7 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
     fetchDriveKnowledgeBaseContext(accessToken),
     fetchRecentEmails(oauth2Client),
     fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence),
-    fetchRecentChats(oauth2Client),
+    fetchRecentChats(oauth2Client, recordVerbatimEvidence),
     fetchTasks(oauth2Client)
   ]);
   const enrichedDriveContext = enrichTimestampTranscriptLinks(driveContext, eventsContext);
