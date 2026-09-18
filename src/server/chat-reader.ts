@@ -2,9 +2,9 @@ import { google } from 'googleapis';
 
 type RecordEvidence = (inputs: any[]) => void;
 
-export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence) {
+export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence, createChatClient = (value: any) => google.chat({ version: 'v1', auth: value })) {
   try {
-    const chat = google.chat({ version: 'v1', auth });
+    const chat = createChatClient(auth);
     const res = await chat.spaces.list({ pageSize: 50 });
     const spaces = res.data.spaces || [];
     let context = 'Aktuelle Chat-Räume & Nachrichten:\n';
