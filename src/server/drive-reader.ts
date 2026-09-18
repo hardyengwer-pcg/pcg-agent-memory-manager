@@ -18,9 +18,9 @@ export async function listAllFiles(drive: any, folderId: string, pathPrefix = ''
   return files;
 }
 
-export async function getFileContent(drive: any, fileId: string, mimeType: string) {
+export async function getFileContent(drive: any, fileId: string, mimeType: string, timeoutMs = 12000) {
   try {
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout reading file')), 12000));
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout reading file')), timeoutMs));
     const downloadPromise = (async () => {
       if (mimeType.includes('google-apps.document')) {
         const response = await drive.files.export({ fileId, mimeType: 'text/plain' });
