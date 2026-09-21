@@ -142,31 +142,34 @@ function extractToolJson(result: any): any {
 export async function fetchOdooProjectStatusContext() {
   try {
     const config = await getConfiguredRemoteMcpServerAsync('odoo-mcp');
-    const projectQueryFields = ['id', 'name', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'];
-    const taskQueryFields = ['id', 'name', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'];
+    const projectQueryFields = ['id', 'name', 'active', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'];
+    const taskQueryFields = ['id', 'name', 'active', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'];
     const [projectsResult, tasksResult] = await Promise.all([
-      callRemoteMcpTool(config, 'search_records', {
+      callRemoteMcpTool(config, 'search_records', { request: {
         model: 'project.project',
-        domain: [{ field: 'active', operator: '=', value: true }],
+        domain: [],
         fields: projectQueryFields,
         limit: 100,
-      }),
-      callRemoteMcpTool(config, 'search_records', {
+      } }),
+      callRemoteMcpTool(config, 'search_records', { request: {
         model: 'project.task',
-        domain: [{ field: 'active', operator: '=', value: true }],
+        domain: [],
         fields: taskQueryFields,
         limit: 100,
-      }),
+      } }),
     ]);
-    const projects = extractToolRecords(projectsResult).slice(0, 40).map(project => ({
+    const projects = extractToolRecords(projectsResult).filter(project => project.active !== false).slice(0, 40).map(project => ({
       ...project,
       customer: project.partner_id || project.company_id || project.account_id || null,
       time_left_hours: typeof project.allocated_hours === 'number' && typeof project.effective_hours === 'number'
-        ? Math.max(0, project.allocated_hours - project.effective_hours)
+        ? project.allocated_hours - project.effective_hours
         : null,
     }));
-    const tasks = extractToolRecords(tasksResult).slice(0, 80);
-    return `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\n[Quelle: Odoo MCP – project.project / project.task](https://odoo-mcp.gateway.pcg.io/mcp/)\nProjekte:\n${JSON.stringify(projects, null, 2)}\nOffene/aktive Tasks:\n${JSON.stringify(tasks, null, 2)}\n`;
+    const tasks = extractToolRecords(tasksResult).filter(task => task.active !== false).slice(0, 80);
+    const relationName = (value: any) => Array.isArray(value) ? value[1] : value || 'unbekannt';
+    const projectLines = projects.map(project => `- Odoo-Projekt-ID ${project.id} | Projekt: ${project.name} | Kunde/Account: ${relationName(project.customer)} | Beauftragt: ${project.allocated_hours ?? 'n/a'}h | Verbraucht: ${project.effective_hours ?? 'n/a'}h | Time left: ${project.time_left_hours ?? 'n/a'}h | Overrun: ${project.is_project_overtime ? 'JA' : 'nein'} | Status: ${project.last_update_status || 'n/a'}`).join('\n');
+    const taskLines = tasks.map(task => `- Odoo-Task-ID ${task.id} | Task: ${task.name} | Projekt: ${relationName(task.project_id)} | Status: ${relationName(task.stage_id)} | Fällig: ${task.date_deadline || 'n/a'} | Geplant: ${task.planned_hours ?? 'n/a'}h | Verbraucht: ${task.effective_hours ?? 'n/a'}h`).join('\n');
+    return `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\n[Quelle: Odoo MCP – project.project / project.task](https://odoo-mcp.gateway.pcg.io/mcp/)\nPROJEKTE / KUNDEN / RESTSTUNDEN:\n${projectLines || '(Keine aktiven Odoo-Projekte geliefert.)'}\nAKTIVE TASKS / ZEITERFASSUNG:\n${taskLines || '(Keine aktiven Odoo-Tasks geliefert.)'}\n`;
   } catch (error: any) {
     console.warn('Odoo MCP project context notice:', error?.message || error);
     return '(Odoo-MCP-Projektkontext nicht verfügbar; keine Odoo-Fakten ableiten.)\n';
@@ -197,7 +200,8 @@ export async function fetchAtlassianJiraStatusContext() {
       updated: issue.fields?.updated,
       labels: issue.fields?.labels,
     })) : jiraData;
-    return `Jira-Projektstatus (read-only, letzte 14 Tage, Site: ${jiraResource.url}):\n[Quelle: Atlassian MCP – Jira searchJiraIssuesUsingJql](https://mcp.atlassian.com/v1/mcp/authv2)\n${JSON.stringify({ total: jiraData.total, issues }, null, 2)}\n`;
+    const issueLines = Array.isArray(issues) ? issues.map((issue: any) => `- Jira ${issue.key || 'n/a'} | Projekt: ${issue.project?.name || issue.project?.key || 'n/a'} | ${issue.summary || 'ohne Summary'} | Status: ${issue.status?.name || 'n/a'} | Priorität: ${issue.priority?.name || 'n/a'} | Assignee: ${issue.assignee?.displayName || issue.assignee?.emailAddress || 'unassigned'} | Updated: ${issue.updated || 'n/a'} | Labels: ${(issue.labels || []).join(', ') || 'keine'}`).join('\n') : JSON.stringify(issues);
+    return `Jira-Projektstatus (read-only, letzte 14 Tage, Site: ${jiraResource.url}):\n[Quelle: Atlassian MCP – Jira searchJiraIssuesUsingJql](https://mcp.atlassian.com/v1/mcp/authv2)\nISSUES:\n${issueLines || '(Keine aktuellen Jira-Issues geliefert.)'}\n`;
   } catch (error: any) {
     console.warn('Atlassian Jira context notice:', error?.message || error);
     return '(Jira-MCP-Projektkontext nicht verfügbar; keine Jira-Fakten ableiten.)\n';
