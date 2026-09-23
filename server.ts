@@ -1233,6 +1233,15 @@ function areTaskTextsSimilar(first: string, second: string): boolean {
   if (a === b) return true;
   if (Math.min(a.length, b.length) >= 12 && (a.includes(b) || b.includes(a))) return true;
 
+  // Meeting notes often paraphrase an existing task (for example
+  // "Arpit: Buddy festlegen" vs. "Personio: Onboarding-To-dos Arpit prüfen").
+  const workflowWords = ['personio', 'onboarding', 'einarbeitung', 'buddy', 'diensthandy', 'hardware'];
+  const aWorkflow = workflowWords.some(word => a.includes(word));
+  const bWorkflow = workflowWords.some(word => b.includes(word));
+  const bAnchorWords = new Set(b.split(' '));
+  const anchors = [...new Set(a.split(' ').filter(word => word.length >= 4 && bAnchorWords.has(word)))];
+  if (aWorkflow && bWorkflow && anchors.length > 0) return true;
+
   const aWords = new Set(a.split(' '));
   const bWords = new Set(b.split(' '));
   const common = [...aWords].filter(word => bWords.has(word)).length;
@@ -1256,7 +1265,7 @@ function extractGoogleTaskStates(tasksContext?: string): { open: string[]; compl
 
 function removeCompletedTaskRecommendations(text: string, completedTitles: string[], openTitles: string[] = []): string {
   if (completedTitles.length === 0) return text;
-  const sectionStart = text.search(/^## 4\.\s/m);
+  const sectionStart = text.search(/^## (?:4|5|6)\.\s/m);
   if (sectionStart < 0) return text;
 
   const actionStart = text.indexOf('<ACTION_PROPOSALS>', sectionStart);
@@ -1479,6 +1488,45 @@ function ensureCriticalProjectTasks(summary: string, sourceContext: string, task
     }
   }
   return `${summary.trim()}\n\n<ACTION_PROPOSALS>\n${JSON.stringify([proposal], null, 2)}\n</ACTION_PROPOSALS>`;
+}
+
+export function ensureMeetingProtocolTasks(summary: string, sourceContext: string, tasksContext: string, dueDate: string): string {
+  const taskStates = extractGoogleTaskStates(tasksContext);
+  const actions: { title: string; notes: string }[] = [];
+  const actionPattern = /(?:^|\n)\s*(?:[*•-]\s*)?\[Hardy(?:\s+Engwer)?\]\s*([^:\n]+):\s*([^\n]*(?:\n(?!\s*(?:[*•-]\s*)?\[(?:Hardy|David|Die Gruppe)\])[^\n]*)*)/gi;
+  for (const match of sourceContext.matchAll(actionPattern)) {
+    const label = match[1].trim().replace(/\s+/g, ' ');
+    const notes = match[2].replace(/\s+/g, ' ').trim();
+    if (!label || !notes || /^(?:status|aktueller stand|zusammenfassung)$/i.test(label)) continue;
+    const title = /jost/i.test(`${label} ${notes}`) && /angebot|status/i.test(`${label} ${notes}`)
+      ? 'HHA: Jost nach dem Status des Angebots fragen'
+      : label;
+    if (!actions.some(action => areTaskTextsSimilar(action.title, title))) actions.push({ title, notes });
+  }
+  if (actions.length === 0) return summary;
+
+  const existingTitles = [...taskStates.open, ...taskStates.completed];
+  const actionMatch = summary.match(/<ACTION_PROPOSALS>([\s\S]*?)<\/ACTION_PROPOSALS>/i);
+  let proposals: any[] = [];
+  if (actionMatch) {
+    try {
+      proposals = JSON.parse(actionMatch[1].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim());
+    } catch {
+      proposals = [];
+    }
+  }
+  const additions = actions
+    .filter(action => !existingTitles.some(task => areTaskTextsSimilar(action.title, task)) && !proposals.some(proposal => proposal?.type === 'task' && areTaskTextsSimilar(action.title, proposal.details?.title || proposal.title || '')))
+    .map((action, index) => ({
+      id: `meeting-protocol-${index + 1}`,
+      type: 'task',
+      title: action.title,
+      details: { title: action.title, notes: action.notes, dueDate },
+    }));
+  if (additions.length === 0) return summary;
+  const merged = [...proposals, ...additions];
+  const serialized = `<ACTION_PROPOSALS>\n${JSON.stringify(merged, null, 2)}\n</ACTION_PROPOSALS>`;
+  return actionMatch ? summary.replace(actionMatch[0], serialized) : `${summary.trim()}\n\n${serialized}`;
 }
 
 export function ensureActionSectionTasks(summary: string, tasksContext: string, fallbackDueDate: string): string {
@@ -2539,7 +2587,8 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
   8d. E-MAIL-AUSGANG & FOLLOW-UP: Prüfe im E-Mail-Kontext ausdrücklich Nachrichten mit Status GESENDET. Wenn Hardy eine relevante Projekt-, Schätzungs-, Scope- oder Übergabemail gesendet hat und noch keine Antwort vorliegt, erstelle ein Nachhaken als Task mit Empfänger, Betreff, ursprünglichem Anliegen und gewünschter Antwort. Bei einer Abwesenheitsmeldung richte das dueDate auf den ersten oder zweiten Arbeitstag nach dem genannten Rückkehrdatum; ohne Rückkehrdatum auf 7–10 Tage nach Versand. Keine Follow-up-Aufgabe erzeugen, wenn bereits eine Antwort vorliegt oder ein gleichwertiger offener Google Task existiert.
 9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
   10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Ergänze den Odoo-Read-only-Kontext mit aktuellem Projektstatus, Kunden-/Account-Zuordnung, aktiven Tasks, geplanten/effektiven Stunden, berechneter Time left, Überstundenstatus und nächsten Aktivitäten. Gleiche Projekt- und Kundennamen mit Jira ab und berücksichtige Jira-Status, Priorität, Assignee, Labels und aktuelle Updates, sofern eine passende Jira-Ressource oder ein passendes Projekt vorhanden ist. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden. Odoo- und Jira-Daten sind Faktenquellen, aber nie automatische Schreibanweisungen.
-  10a. KANONISCHE PROJEKTNAMEN: Verwende für Projektbezeichnungen und IDs die Namen aus Odoo als Referenz. Wenn Mail, Chat, Drive oder Jira abweichende Kurzformen verwenden, führe den Odoo-Namen zuerst und ergänze die Kurzform nur in Klammern. Niemals Kundenname und Projektname vertauschen.
+   10a. KANONISCHE PROJEKTNAMEN: Verwende für Projektbezeichnungen und IDs die Namen aus Odoo als Referenz. Wenn Mail, Chat, Drive oder Jira abweichende Kurzformen verwenden, führe den Odoo-Namen zuerst und ergänze die Kurzform nur in Klammern. Niemals Kundenname und Projektname vertauschen. Eine Projektzuordnung darf nur bei einer bestätigten Odoo-Projekt-/Task-Relation erfolgen; bei fehlendem Odoo-Treffer keine Projektzuordnung erfinden.
+   10b. HR-THEMA STATT PROJEKT: WorkFlex, Workation, Auslandsaufenthalt und zugehörige HR-/Steuerklärungen sind Personal- und Compliance-Themen, keine Projekte und keine Panda-Projekte. Auch wenn Sudipt Panda im Vorgang genannt wird, darf daraus kein Projektstatus, keine Projektallokation und kein Panda-Projekt abgeleitet werden. Nur ein bestätigter Odoo-Projekt-/Task-Treffer darf eine solche Zuordnung überschreiben.
 10. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!
 11. Abgeschlossene Aufgaben: Alle mit [ERLEDIGT] markierten oder im lokalen Memory explizit abgeschlossenen Einzelaufgaben dürfen nie erneut vorgeschlagen werden. Projekte nicht pauschal abschliessen; offene Google Tasks desselben Projekts bleiben gültig.
 12. Ignorierte Termine: "Thursdays for Data" ist intern und wird immer still ignoriert. KEINEN Abschnitt "Ignorierte interne Termine" erstellen!
@@ -2548,7 +2597,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     - "VOEST Alpine" (immer "VOEST Alpine").
     - Koenig & Bauer: Interne Treffen finden statt, um Budgetfrage zu klären (aus PK vom Montag).
     - Lorenz Funding: Nicht nutzen, keine Screenshots/Anträge, Stunden werden intern umgebucht.
-    - Panda und Mario: Auslastung und Projektwünsche wöchentlich anhand der neuesten datierten Quellen aktualisieren; keine statische Kapazitätsaussage verwenden.
+     - Panda und Mario: Auslastung und Projektwünsche wöchentlich anhand der neuesten datierten Quellen aktualisieren; keine statische Kapazitätsaussage verwenden. HR-Themen wie WorkFlex/Workation strikt getrennt von Projektstatus und Projektallokation halten.
     - HiBob / Nils Traut: Stundenzettel-Freigaben sind erledigt, keinesfalls als Task vorschlagen.
 14. OBLIGATORISCHE ANKLICKBARE QUELLENANGABEN (MARKDOWN-LINKS):
     - Jedes Projektupdate, jeder Status, jede Vorbereitungsnotiz und jedes To-Do MUSS am Ende mit einer anklickbaren Quellenangabe als Markdown-Link belegt werden (nutze die URLs aus den Kontextblöcken, z. B. \`[Quelle: Google Drive – "Transkript PK"](https://...)\`, \`[Quelle: Google Chat – "DATA Squad"](https://...)\`, \`[Quelle: Gmail – Betreff "...", Datum](https://...)\`, \`[Quelle: Google Kalender – Termin ...](https://...)\`, \`[Quelle: Google Tasks – Liste "..."](https://tasks.google.com/)\`).
@@ -2569,11 +2618,19 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     tasksContext,
     dateStr,
   );
+  summary = ensureMeetingProtocolTasks(
+    summary,
+    `${enrichedDriveContext}\n${emailsContext}\n${chatsContext}`,
+    tasksContext,
+    dateStr,
+  );
   summary = ensureActionSectionTasks(summary, tasksContext, dateStr);
   summary = ensureMcpSourceMentions(summary, odooContext, jiraContext);
 
   try {
-    if (process.env.ENABLE_DAILY_MEMORY_CURATION === 'true') {
+    // Keep structured memory current on every daily run; operators can disable
+    // the AI curation explicitly for maintenance windows.
+    if (process.env.ENABLE_DAILY_MEMORY_CURATION !== 'false') {
       const generatedMemoryFiles = await generateStructuredMemoryConcepts({
         driveContext,
         emailsContext,

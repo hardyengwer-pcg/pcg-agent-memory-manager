@@ -661,7 +661,9 @@ async function cmdMcpDiscover() {
 }
 
 async function cmdOdooMcpCall(toolName: string, rawArgs = '{}') {
-  const result = await callRemoteMcpTool(await getConfiguredRemoteMcpServerAsync('odoo-mcp'), toolName, JSON.parse(rawArgs));
+  const args = JSON.parse(rawArgs);
+  const requestTools = new Set(['get_model_fields', 'search_records', 'read_records', 'count_records', 'aggregate_records', 'prepare_mutation', 'commit_mutation']);
+  const result = await callRemoteMcpTool(await getConfiguredRemoteMcpServerAsync('odoo-mcp'), toolName, requestTools.has(toolName) ? { request: args } : args);
   console.log(JSON.stringify(result, null, 2));
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { detectStructuredMemoryChanges, ensureActionSectionTasks, extractDavidOneOnOneAgenda, extractProjectCapacityEvidence, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals, sanitizeCurrentSquadCapacityClaims, validateDailyBriefingStructure } from '../server.ts';
+import { detectStructuredMemoryChanges, ensureActionSectionTasks, ensureMeetingProtocolTasks, extractDavidOneOnOneAgenda, extractProjectCapacityEvidence, loadSkillContext, normalizeStructuredMemoryCategories, sanitizeActionProposals, sanitizeCurrentSquadCapacityClaims, validateDailyBriefingStructure } from '../server.ts';
 
 const tasksContext = `Google Tasks - AUTORITATIVE AUFGABENZUSTAENDE:
 OFFEN:
@@ -133,6 +133,20 @@ test('mirrors concrete section actions into dated task proposals without reactiv
   assert.doesNotMatch(result, /"title": "Alte Aufgabe nicht reaktivieren"/);
 });
 
+test('adds the Hardy action from the David/Jost meeting notes and skips it when completed', () => {
+  const summary = '# Daily\n\n<ACTION_PROPOSALS>\n[]\n</ACTION_PROPOSALS>';
+  const source = '[Hardy Engwer] Hochbahn Status klären: Jost nach dem aktuellen Status des Angebots fragen und Unterstützung anbieten.';
+  const tasks = 'OFFEN:\nERLEDIGT:\n';
+  const result = ensureMeetingProtocolTasks(summary, source, tasks, '2026-09-23');
+
+  assert.match(result, /Jost nach dem Status des Angebots fragen/);
+  assert.match(result, /"dueDate": "2026-09-23"/);
+  assert.doesNotMatch(
+    ensureMeetingProtocolTasks(summary, source, '- [ERLEDIGT] Jost nach dem Status des Angebots fragen | Liste: My Tasks', '2026-09-23'),
+    /meeting-protocol-jost-offer-status/,
+  );
+});
+
 test('removes completed task from recommendations and proposals', () => {
   const text = `## 4. Konkrete naechste Schritte
 - **FNTV Cloud Function Timeout Alert pruefen** - Faellig: heute
@@ -151,6 +165,23 @@ test('removes completed task from recommendations and proposals', () => {
 
   assert.doesNotMatch(result, /FNTV Cloud Function Timeout Alert/);
   assert.match(result, /Neuen Punkt pruefen/);
+});
+
+test('removes a paraphrased completed Personio task from the report', () => {
+  const text = `## 5. 🚨 Dringende Klärungen & Projekt-To-dos
+- **Arpit Gothwal: Rückmeldung zu Einarbeitung & Buddy-Zuweisung** — Fälligkeit: 2026-09-23
+  • **Details:** Rückmeldung und Buddy festlegen.
+
+<ACTION_PROPOSALS>
+[
+  {"type":"task","title":"Arpit Gothwal: Rückmeldung zu Einarbeitung & Buddy-Zuweisung","details":{}}
+]
+</ACTION_PROPOSALS>`;
+  const tasks = 'OFFEN:\nERLEDIGT:\n- [ERLEDIGT] Personio: Onboarding-To-dos Arpit Gothwal prüfen | Liste: My Tasks';
+
+  const result = sanitizeActionProposals(text, tasks, '');
+
+  assert.doesNotMatch(result, /Arpit Gothwal: Rückmeldung/);
 });
 
 test('keeps an open task when a matching historical task is completed', () => {
