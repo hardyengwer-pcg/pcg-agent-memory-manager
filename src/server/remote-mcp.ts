@@ -363,7 +363,7 @@ export async function fetchAtlassianJiraStatusContext() {
       fields: ['summary', 'status', 'project', 'priority', 'assignee', 'updated', 'labels'],
     });
     const jiraData = extractToolJson(issuesResult) || {};
-    const issues = Array.isArray(jiraData.issues) ? jiraData.issues.slice(0, 40).map((issue: any) => ({
+     const issues = Array.isArray(jiraData.issues) ? jiraData.issues.slice(0, 20).map((issue: any) => ({
       key: issue.key,
       summary: issue.fields?.summary,
       project: issue.fields?.project,
@@ -374,7 +374,34 @@ export async function fetchAtlassianJiraStatusContext() {
       labels: issue.fields?.labels,
     })) : jiraData;
     const issueLines = Array.isArray(issues) ? issues.map((issue: any) => `- Jira ${issue.key || 'n/a'} | Projekt: ${issue.project?.name || issue.project?.key || 'n/a'} | ${issue.summary || 'ohne Summary'} | Status: ${issue.status?.name || 'n/a'} | Priorität: ${issue.priority?.name || 'n/a'} | Assignee: ${issue.assignee?.displayName || issue.assignee?.emailAddress || 'unassigned'} | Updated: ${issue.updated || 'n/a'} | Labels: ${(issue.labels || []).join(', ') || 'keine'}`).join('\n') : JSON.stringify(issues);
-    return `Jira-Projektstatus (read-only, letzte 14 Tage, Site: ${jiraResource.url}):\n[Quelle: Atlassian MCP – Jira searchJiraIssuesUsingJql](https://mcp.atlassian.com/v1/mcp/authv2)\nISSUES:\n${issueLines || '(Keine aktuellen Jira-Issues geliefert.)'}\n`;
+    let leadershipContext = '';
+    try {
+      const leadershipSearchResult = await callRemoteMcpTool(config, 'searchConfluenceUsingCql', {
+        cloudId: jiraResource.id,
+        cql: 'type in (page, blogpost) and (title ~ "Leadership" or title ~ "Probation" or text ~ "capacity" or text ~ "utilization" or text ~ "squad" or text ~ "allocation" or text ~ "billability" or text ~ "probation")',
+        limit: 12,
+      });
+      const leadershipSearch = extractToolJson(leadershipSearchResult);
+      const searchedPages = Array.isArray(leadershipSearch?.results) ? leadershipSearch.results.map((result: any) => result.content || result).filter((page: any) => page.id && ['page', 'blogpost'].includes(page.type)) : [];
+      const requiredPages = [
+        { id: '3265986821', title: 'Probation Period Management', type: 'page' },
+        { id: '3276210275', title: 'Personio Enablement Trainings for Leads', type: 'page' },
+        { id: '3221487767', title: 'Freelancer Engagement: New JIRA Process', type: 'blogpost' },
+      ];
+      const pages = [...requiredPages, ...searchedPages].filter((page, index, all) => all.findIndex(other => other.id === page.id) === index).slice(0, 10);
+      const pageResults = await Promise.all(pages.map((page: any) => callRemoteMcpTool(config, 'getConfluencePage', { cloudId: jiraResource.id, pageId: page.id })));
+      const pageLines = pageResults.map((result: any, index: number) => {
+        const page = extractToolJson(result) || {};
+        const body = typeof page.body === 'string' ? page.body : JSON.stringify(page.body || '');
+        const title = page.title || pages[index].title || 'Leadership-Hub-Seite';
+        const url = `https://public-cloud-group.atlassian.net/wiki${pages[index]._links?.webui || `/pages/viewpage.action?pageId=${pages[index].id}`}`;
+        return `- Leadership-Hub: ${title} | Aktualisiert: ${page.version?.createdAt || 'n/a'} | Quelle: ${url}\n${body.slice(0, 5000)}`;
+      }).filter(Boolean).join('\n');
+      leadershipContext = `LEADERSHIP-HUB-PLAYBOOKS (read-only, live aus Confluence; daraus Empfehlungen für Hardy als Squad Lead ableiten):\n${pageLines || '(Keine passenden aktuellen Leadership-Hub-Seiten geliefert.)'}\n`;
+    } catch (error: any) {
+      console.warn('Atlassian Leadership Hub context notice:', error?.message || error);
+    }
+    return `Jira-Projektstatus (read-only, letzte 14 Tage, Site: ${jiraResource.url}):\n[Quelle: Atlassian MCP – Jira searchJiraIssuesUsingJql](https://mcp.atlassian.com/v1/mcp/authv2)\nISSUES:\n${issueLines || '(Keine aktuellen Jira-Issues geliefert.)'}\n${leadershipContext}`;
   } catch (error: any) {
     console.warn('Atlassian Jira context notice:', error?.message || error);
     return '(Jira-MCP-Projektkontext nicht verfügbar; keine Jira-Fakten ableiten.)\n';

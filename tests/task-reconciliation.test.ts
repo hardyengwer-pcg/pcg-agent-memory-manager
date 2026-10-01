@@ -139,7 +139,7 @@ test('adds the Hardy action from the David/Jost meeting notes and skips it when 
   const tasks = 'OFFEN:\nERLEDIGT:\n';
   const result = ensureMeetingProtocolTasks(summary, source, tasks, '2026-09-23');
 
-  assert.match(result, /Jost nach dem Status des Angebots fragen/);
+  assert.match(result, /Hochbahn Status klären/);
   assert.match(result, /"dueDate": "2026-09-23"/);
   assert.doesNotMatch(
     ensureMeetingProtocolTasks(summary, source, '- [ERLEDIGT] Jost nach dem Status des Angebots fragen | Liste: My Tasks', '2026-09-23'),

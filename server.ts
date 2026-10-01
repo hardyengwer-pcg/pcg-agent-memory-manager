@@ -594,6 +594,8 @@ app.post('/api/token-sync', (req, res) => {
 });
 
 export const driveFolderId = '1YK8hW4LWtZdmLW-hLcs9fFX_jFz3teOB';
+export const driveMeetRecordingsFolderId = '1iX0fNTKFoF-LPeu2LFGIhFzgEKfj8Lws';
+export const driveTranscriptFolderId = '1Hk053rZZhE720Ri5uVdGPwYOYQ36tpHT';
 
 export function getOAuth2Client(accessToken: string) {
   const oauth2Client = new google.auth.OAuth2();
@@ -606,7 +608,7 @@ export async function getDriveClient(accessToken: string) {
 }
 
 function fetchDriveContext(accessToken: string) {
-  return readDriveKnowledgeBaseContext(accessToken, driveFolderId, {
+  return readDriveKnowledgeBaseContext(accessToken, [driveFolderId, driveMeetRecordingsFolderId, driveTranscriptFolderId], {
     getDriveClient,
     listAllFiles,
     getFileContent,
@@ -1078,8 +1080,8 @@ function extractCurrentSquadSignals(driveContext: string, chatsContext: string):
   const relevantBlocks = currentSourceBlocks.filter(block => /panda|mario|auslastung|kapazität|neue[nr]?\s+projekte|staffing|resource planner|billability|allocation/i.test(block));
   const chatLines = chatsContext.split(/\r?\n/).filter(line => /panda|mario|auslastung|kapazität|neue[nr]?\s+projekte|staffing|resource planner|billability|allocation/i.test(line));
   const signals = [
-    ...relevantBlocks.slice(0, 4).map(block => block.slice(0, 2000)),
-    chatLines.slice(0, 40).join('\n'),
+    ...relevantBlocks.slice(0, 3).map(block => block.slice(0, 1600)),
+    chatLines.slice(0, 25).join('\n'),
   ].filter(Boolean).join('\n\n');
   return signals || '(Keine aktuelle datierte Squad-Auslastungsquelle für Panda oder Mario gefunden.)';
 }
@@ -1091,12 +1093,12 @@ export function extractProjectCapacityEvidence(driveContext: string, emailsConte
   const sourceBlocks = driveBlocks
     .filter(block => !/(?:^|\s)(?:projects|customers|squad|general)\/[^\s"|]+\.md/i.test(block))
     .filter(block => evidencePattern.test(block))
-    .slice(0, 15)
-    .map(block => block.slice(0, 2500));
+    .slice(0, 6)
+    .map(block => block.slice(0, 1800));
   const messageLines = `${emailsContext}\n${chatsContext}`
     .split(/\r?\n/)
     .filter(line => evidencePattern.test(line))
-    .slice(0, 100);
+    .slice(0, 40);
   return [...sourceBlocks, messageLines.join('\n')].filter(Boolean).join('\n\n') || '(Keine projekt- oder kapazitätsbezogenen Quellen gefunden.)';
 }
 
@@ -1498,10 +1500,7 @@ export function ensureMeetingProtocolTasks(summary: string, sourceContext: strin
     const label = match[1].trim().replace(/\s+/g, ' ');
     const notes = match[2].replace(/\s+/g, ' ').trim();
     if (!label || !notes || /^(?:status|aktueller stand|zusammenfassung)$/i.test(label)) continue;
-    const title = /jost/i.test(`${label} ${notes}`) && /angebot|status/i.test(`${label} ${notes}`)
-      ? 'HHA: Jost nach dem Status des Angebots fragen'
-      : label;
-    if (!actions.some(action => areTaskTextsSimilar(action.title, title))) actions.push({ title, notes });
+    if (!actions.some(action => areTaskTextsSimilar(action.title, label))) actions.push({ title: label, notes });
   }
   if (actions.length === 0) return summary;
 
@@ -1516,7 +1515,7 @@ export function ensureMeetingProtocolTasks(summary: string, sourceContext: strin
     }
   }
   const additions = actions
-    .filter(action => !existingTitles.some(task => areTaskTextsSimilar(action.title, task)) && !proposals.some(proposal => proposal?.type === 'task' && areTaskTextsSimilar(action.title, proposal.details?.title || proposal.title || '')))
+    .filter(action => !existingTitles.some(task => areTaskTextsSimilar(action.title, task) || areTaskTextsSimilar(action.notes, task)) && !proposals.some(proposal => proposal?.type === 'task' && (areTaskTextsSimilar(action.title, proposal.details?.title || proposal.title || '') || areTaskTextsSimilar(action.notes, proposal.details?.title || proposal.title || ''))))
     .map((action, index) => ({
       id: `meeting-protocol-${index + 1}`,
       type: 'task',
@@ -2579,14 +2578,18 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
 6. Proaktive Meeting-Vorbereitung (spätestens 1 Tag vorher): Bereite Hardy auf Kunden- und Use-Case-Meetings (wie Schwarz / DSV) für heute, morgen und Montag basierend auf vorhandenen Notizen und eingetragenen Vorbereitungen vor.
 7. Vorausschau: Schaue vorausschauend auf Montag und die nächste Woche.
 8. Vollständigkeit: Gehe lückenlos alle aktiven, unerledigten Themen durch und synchronisiere sie mit den neuesten Quellen.
-  8a. DOPPLUNGSVERBOT: Änderungen ausschließlich in Abschnitt 1, Squad-Lead-Kontrollen ausschließlich in Abschnitt 2, dringende Projektklärungen ausschließlich in Abschnitt 5 und weitere To-dos ausschließlich in Abschnitt 6. Meetings nennen nur Agenda und Vorbereitung. Abschnitt 7 enthält je Projekt nur eine kompakte Statuszeile ohne Wiederholung.
+  8a. DOPPLUNGSVERBOT: Änderungen ausschließlich in Abschnitt 1, Squad-Lead-Kontrollen ausschließlich in Abschnitt 2, dringende Projektklärungen ausschließlich in Abschnitt 5 und weitere To-dos ausschließlich in Abschnitt 6. Meetings nennen nur Agenda und Vorbereitung. Abschnitt 7 enthält je Projekt nur eine kompakte Statuszeile ohne Wiederholung. Jede konkrete Information darf im gesamten Bericht nur einmal ausführlich erscheinen; an anderer Stelle nur mit einem kurzen Verweis auf den Ursprungsabschnitt.
   8b. PRIORITÄT: Dringende Blocker, Entscheidungen, fällige Projektaktionen und konkrete nächste Schritte stehen vor der optionalen Projektstatusübersicht. Die Statusübersicht darf nie zulasten dieser Hinweise ausführlich werden.
   8c. TODO-SYNCHRONISATION: Jede konkrete Aktion in Abschnitt 5 oder 6 muss als task in ACTION_PROPOSALS gespiegelt werden. Jede solche task-Aktion braucht ein sinnvolles dueDate im Format YYYY-MM-DD; offene Projektaktionen ohne Enddatum sind nicht zulässig.
   8e. EXPLIZITE BENUTZERBITTEN: Wenn Hardy in Chat, Mail oder Meeting ausdrücklich sagt, dass er sich um einen konkreten Kundenblocker oder Zugang kümmern will (z. B. WireGuard-Zugang für HHA), muss daraus zwingend ein eigener Google-Task mit Owner Hardy, konkreter nächster Aktion und Fälligkeitsdatum entstehen. Ein bloßer Hinweis in Abschnitt 1 reicht nicht.
   8f. TASK-ABGLEICH: Offene konkrete Aktionen aus Abschnitt 5 und 6 müssen in Google Tasks erscheinen. Erledigte Google Tasks und explizit abgeschlossene Aktionen dürfen weder im Bericht als offene nächste Schritte erscheinen noch erneut angelegt werden. Wenn eine Aktion heute fällig oder überfällig ist, verwende heute (${dateStr}) als Fälligkeitsdatum, sofern keine neue realistische Frist belegt ist.
   8d. E-MAIL-AUSGANG & FOLLOW-UP: Prüfe im E-Mail-Kontext ausdrücklich Nachrichten mit Status GESENDET. Wenn Hardy eine relevante Projekt-, Schätzungs-, Scope- oder Übergabemail gesendet hat und noch keine Antwort vorliegt, erstelle ein Nachhaken als Task mit Empfänger, Betreff, ursprünglichem Anliegen und gewünschter Antwort. Bei einer Abwesenheitsmeldung richte das dueDate auf den ersten oder zweiten Arbeitstag nach dem genannten Rückkehrdatum; ohne Rückkehrdatum auf 7–10 Tage nach Versand. Keine Follow-up-Aufgabe erzeugen, wenn bereits eine Antwort vorliegt oder ein gleichwertiger offener Google Task existiert.
 9. AKTUELLE SQUAD-SIGNALE: Der Abschnitt \`AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN\` ist für Mario- und Panda-Auslastung maßgeblich. Wenn dort Mario-Projektideen, Kapazitätsoptionen oder Pandas Wunsch nach neuen Projekten stehen, muss dies im Squad-Status beziehungsweise in der David-Weekly-Agenda erscheinen. Wenn dort kein aktueller Panda-Eintrag steht, darf kein alter "Panda ist voll ausgelastet"-Fakt ausgegeben werden.
-  10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Ergänze den Odoo-Read-only-Kontext mit aktuellem Projektstatus, Kunden-/Account-Zuordnung, aktiven Tasks, geplanten/effektiven Stunden, berechneter Time left, Überstundenstatus und nächsten Aktivitäten. Gleiche Projekt- und Kundennamen mit Jira ab und berücksichtige Jira-Status, Priorität, Assignee, Labels und aktuelle Updates, sofern eine passende Jira-Ressource oder ein passendes Projekt vorhanden ist. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden. Odoo- und Jira-Daten sind Faktenquellen, aber nie automatische Schreibanweisungen.
+   10. PROJEKT- UND KAPAZITÄTSAUDIT: Prüfe den Abschnitt \`PROJEKT- UND KAPAZITÄTSÄNDERUNGEN / QUELLEN-AUDIT\` vollständig. Berücksichtige jede relevante Erwähnung zu Projekten, SOWs, Budgets, Pipelines, Staffing, Allocation, Billability, Resource Planner, Booking, Bench, Unassigned und Presales. Ergänze den Odoo-Read-only-Kontext mit aktuellem Projektstatus, Kunden-/Account-Zuordnung, aktiven Tasks, geplanten/effektiven Stunden, berechneter Time left, Überstundenstatus und nächsten Aktivitäten. Gleiche Projekt- und Kundennamen mit Jira ab und berücksichtige Jira-Status, Priorität, Assignee, Labels und aktuelle Updates, sofern eine passende Jira-Ressource oder ein passendes Projekt vorhanden ist. Jede materielle Änderung gegenüber dem bisherigen Stand muss im Briefing mit dem Präfix \`[ÄNDERUNG]\`, aktuellem Stand, Auswirkung und Quelle kenntlich gemacht werden. Odoo- und Jira-Daten sind Faktenquellen, aber nie automatische Schreibanweisungen.
+   10c. PLAYBOOK-EMPFEHLUNGEN BEI UNTERAUSLASTUNG: Wenn Odoo, Resource Planner oder aktuelle datierte Quellen eine Unterauslastung, freie Kapazität, auslaufende Reststunden oder fehlende Pipeline bei einem Squad-Mitglied zeigen, muss Abschnitt 2 einen expliziten Unterpunkt \'Playbook-Empfehlung für Hardy\' enthalten. Leite die Empfehlung aus dem live geladenen Downtime-Playbook und den Resource-Planner-Duties ab und priorisiere: P1 sofort billable Arbeit (bestehende Kunden, Cross-Deployment, Partner-Platzierung), P2 kurzfristig billable Arbeit (Presales, Angebote, PoCs, Account Expansion), P3 bewusst geplante Kostenreduktion (Urlaub/Überstundenabbau) und P4 Sellability (nachfrageorientierte Zertifizierung/Enablement). Nenne immer Person, erkannte Kapazitätslücke, konkrete nächste Maßnahme und die Playbook-/Regelquelle. Leadership-Hub-Seiten ergänzen diese Empfehlung. Keine Empfehlung erfinden, wenn die aktuelle Kapazitäts- oder Projektdatenlage sie nicht trägt.
+   10d. PROBATION-PROZESS: Wenn ein Squad-Mitglied in der Probezeit ist oder ein Onboarding ansteht, nutze die live geladene Confluence-Regelquelle \`Probation Period Management\`. Berücksichtige Managerpflichten, konkrete Ziele, regelmäßige Check-ins, Midpoint-/Final-Feedback in Personio, dokumentierte Konsequenzen und mögliche Risiken durch Aktivitäten vor dem offiziellen Startdatum. Leite nur belegte Hardy-To-dos ab und verlinke die Confluence-Quelle.
+   10e. PERSONIO-ENABLEMENT: Bei Führungs-, Onboarding- und Personio-Themen nutze zusätzlich die live geladene Regelquelle \`Personio Enablement Trainings for Leads\`. Berücksichtige dort definierte Lead-Trainings, Fristen, Verantwortlichkeiten und notwendige Personio-Schritte; leite daraus nur konkrete, aktuelle Empfehlungen für Hardy ab und verlinke die Confluence-Quelle.
+   10f. FREELANCER-JIRA-PROZESS: Bei Freelancer-Einsätzen, externen Ressourcen und zugehörigen Jira-Aufgaben nutze die live geladene Quelle \`Freelancer Engagement: New JIRA Process\`. Befolge die dort definierten Anlage-, Zuordnungs-, Status- und Verantwortlichkeitsregeln; erfinde keine Jira-Zuordnung und leite nur belegte Hardy-Aktionen ab.
    10a. KANONISCHE PROJEKTNAMEN: Verwende für Projektbezeichnungen und IDs die Namen aus Odoo als Referenz. Wenn Mail, Chat, Drive oder Jira abweichende Kurzformen verwenden, führe den Odoo-Namen zuerst und ergänze die Kurzform nur in Klammern. Niemals Kundenname und Projektname vertauschen. Eine Projektzuordnung darf nur bei einer bestätigten Odoo-Projekt-/Task-Relation erfolgen; bei fehlendem Odoo-Treffer keine Projektzuordnung erfinden.
    10b. HR-THEMA STATT PROJEKT: WorkFlex, Workation, Auslandsaufenthalt und zugehörige HR-/Steuerklärungen sind Personal- und Compliance-Themen, keine Projekte und keine Panda-Projekte. Auch wenn Sudipt Panda im Vorgang genannt wird, darf daraus kein Projektstatus, keine Projektallokation und kein Panda-Projekt abgeleitet werden. Nur ein bestätigter Odoo-Projekt-/Task-Treffer darf eine solche Zuordnung überschreiben.
 10. Querabgleich mit Terminen: Wenn heute ein Meeting (z. B. 1:1 mit Teammitgliedern) ansteht, nimm besprechbare Punkte als Meeting-Agendapunkte auf – erstelle aber To-Dos für echte Vorbereitungsaufgaben und vergangene Action Items!

@@ -1,7 +1,7 @@
 type DriveDependencies = {
   getDriveClient: (accessToken: string) => Promise<any>;
   listAllFiles: (drive: any, folderId: string) => Promise<any[]>;
-  getFileContent: (drive: any, fileId: string, mimeType: string) => Promise<string | null>;
+  getFileContent: (drive: any, fileId: string, mimeType: string, timeoutMs?: number) => Promise<string | null>;
   recordEvidence: (inputs: any[]) => void;
   loadLocalMemoryContext: () => string;
 };
@@ -16,9 +16,11 @@ export function enrichTimestampTranscriptLinks(driveContext: string, eventsConte
   return driveContext.replace(
     /--- DOKUMENT \/ TRANSKRIPT \/ VORBEREITUNG: "([^"]*Transkript_[^"\s]+)"[^\n]*---([\s\S]*?)(?=\n--- DOKUMENT \/ TRANSKRIPT \/ VORBEREITUNG:|$)/gi,
     (block, name, body) => {
-      const timestamp = name.match(/Transkript_(\d{4}-\d{2}-\d{2})[_-](\d{2})[-:](\d{2})/i);
+      const timestamp = name.match(/Transkript_(\d{4}-\d{2}-\d{2})[_-](\d{2})[-:](\d{2})/i) || body.match(/(?:generated on|erstellt am|generiert am)\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4}),?\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
       if (!timestamp || events.length === 0) return `${block}\n[TRANSKRIPT-ZUORDNUNG: ungeklärt – kein passender Kalenderzeitpunkt ermittelbar]`;
-      const transcriptTime = Date.parse(`${timestamp[1]}T${timestamp[2]}:${timestamp[3]}:00`);
+      const transcriptTime = timestamp[1].includes('-')
+        ? Date.parse(`${timestamp[1]}T${timestamp[2]}:${timestamp[3]}:00`)
+        : Date.parse(`${timestamp[1]} ${timestamp[2]}:${timestamp[3]} ${timestamp[4] || ''}`);
       const transcriptText = body.slice(0, 1800).toLowerCase();
       const candidates = events.map(event => {
         const minutesAfterEnd = (transcriptTime - event.end) / 60000;
@@ -35,14 +37,34 @@ export function enrichTimestampTranscriptLinks(driveContext: string, eventsConte
   );
 }
 
-export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveFolderId: string, dependencies: DriveDependencies) {
+export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveFolderId: string | string[], dependencies: DriveDependencies) {
   try {
     const drive = await dependencies.getDriveClient(accessToken);
-    const folderFiles = await dependencies.listAllFiles(drive, driveFolderId);
+    const externalPlaybooks = [
+      {
+        id: '1JoDeOWLoDmFU-kjWcJ6aKxosD-lWAcELqrPUgVp1bc4',
+        name: 'Playbook: nicht ausgelastete Squad-Mitglieder',
+        url: 'https://docs.google.com/document/d/1JoDeOWLoDmFU-kjWcJ6aKxosD-lWAcELqrPUgVp1bc4/edit',
+      },
+      {
+        id: '1j_A5aPj7HneC9NhWs7kY0dfva4aIb2EuZ0z8I-GTZXU',
+        name: 'Resource Planner Duties und Kapazitätsregeln',
+        url: 'https://docs.google.com/document/d/1j_A5aPj7HneC9NhWs7kY0dfva4aIb2EuZ0z8I-GTZXU/edit',
+      },
+    ];
+    const externalContents = await Promise.all(externalPlaybooks.map(async source => ({
+      source,
+      content: await dependencies.getFileContent(drive, source.id, 'application/vnd.google-apps.document', 30000),
+    })));
+    const externalContext = externalContents.filter(item => item.content).map(({ source, content }) => {
+      dependencies.recordEvidence([{ sourceType: 'drive', sourceId: source.id, content: content!, sourceTimestamp: new Date().toISOString(), sourceUrl: source.url, metadata: { name: source.name, external: true } }]);
+      return `--- EXTERNE PLAYBOOK-/REGELQUELLE: "${source.name}" | Direktlink: ${source.url} ---\n${content}\n\n`;
+    }).join('');
+    const folderFiles = (await Promise.all((Array.isArray(driveFolderId) ? driveFolderId : [driveFolderId]).map(folderId => dependencies.listAllFiles(drive, folderId)))).flat();
     let broadFiles: any[] = [];
     try {
       const response = await drive.files.list({
-        q: "trashed = false and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/vnd.google-apps.presentation' or mimeType = 'text/plain' or mimeType = 'text/markdown' or mimeType = 'text/csv' or mimeType = 'application/pdf')",
+          q: "trashed = false and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/vnd.google-apps.presentation' or mimeType = 'text/plain' or mimeType = 'text/markdown' or mimeType = 'text/csv')",
         pageSize: 100,
         orderBy: 'modifiedTime desc',
         fields: 'files(id, name, mimeType, modifiedTime, webViewLink)',
@@ -70,19 +92,29 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     for (const file of [...folderFiles, ...broadFiles, ...targetedFiles.flat()]) {
       if (file.id && !fileMap.has(file.id)) fileMap.set(file.id, file.path ? file : { ...file, path: file.name });
     }
+    const cutoff = Date.now() - 2 * 24 * 60 * 60 * 1000;
     const eligibleFiles = Array.from(fileMap.values()).filter(file =>
-      file.mimeType === 'text/markdown' || file.mimeType === 'text/plain' || file.mimeType === 'text/csv' ||
-      file.mimeType?.includes('google-apps.document') || file.mimeType?.includes('google-apps.spreadsheet') || file.mimeType?.includes('google-apps.presentation') ||
-      file.name?.endsWith('.md') || file.name?.endsWith('.txt') || file.name?.endsWith('.csv') ||
-      /einarbeitung|onboarding|mitarbeiter|plan|september|welcome|joiner|schulung|training|squad|data|schwarz|dsv|vorbereitung|use\s*case|protokoll|transkript|transcript|meeting|notes|briefing|koenig|bauer|pk|lorenz|domcura|voest|alpine/i.test(file.name || '')
+      file.modifiedTime && new Date(file.modifiedTime).getTime() >= cutoff && file.mimeType !== 'application/vnd.google-apps.shortcut' && (
+        file.mimeType === 'text/markdown' || file.mimeType === 'text/plain' || file.mimeType === 'text/csv' ||
+        file.mimeType?.includes('google-apps.document') || file.mimeType?.includes('google-apps.spreadsheet') || file.mimeType?.includes('google-apps.presentation') ||
+        file.name?.endsWith('.md') || file.name?.endsWith('.txt') || file.name?.endsWith('.csv') ||
+        /einarbeitung|onboarding|mitarbeiter|plan|september|welcome|joiner|schulung|training|squad|data|schwarz|dsv|vorbereitung|use\s*case|protokoll|transkript|transcript|meeting|notes|briefing|koenig|bauer|pk|lorenz|domcura|voest|alpine/i.test(file.name || '')
+      )
     );
-    eligibleFiles.sort((a, b) => new Date(b.modifiedTime || 0).getTime() - new Date(a.modifiedTime || 0).getTime());
+    eligibleFiles.sort((a, b) => {
+      const aMeeting = /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(a.name || a.path || '');
+      const bMeeting = /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(b.name || b.path || '');
+      return Number(bMeeting) - Number(aMeeting) || new Date(b.modifiedTime || 0).getTime() - new Date(a.modifiedTime || 0).getTime();
+    });
 
     let context = '';
     for (const file of eligibleFiles.slice(0, 20)) {
       const content = await dependencies.getFileContent(drive, file.id, file.mimeType);
       if (typeof content !== 'string') continue;
-      const trimmedContent = content.length > 2500 ? `${content.slice(0, 2500)}\n...[Gekürzt bei 2.500 Zeichen]` : content;
+      const isMeetingDocument = /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || '');
+      const trimmedContent = content.length > 3000 && isMeetingDocument
+        ? `${content.slice(0, 1500)}\n...[Mitte gekürzt]...\n${content.slice(-3000)}`
+        : content.length > 2500 ? `${content.slice(0, 2500)}\n...[Gekürzt bei 2.500 Zeichen]` : content;
       const modified = file.modifiedTime ? new Date(file.modifiedTime) : null;
       const dateLabel = modified ? modified.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
       const futurePlan = /einarbeitung|onboarding|mitarbeiter|plan|september|schulung|welcome|new\s*joiner/i.test(file.path || file.name) || /einarbeitung|onboarding|september|neuer\s*mitarbeiter/i.test(trimmedContent.slice(0, 500));
@@ -101,7 +133,7 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
       dependencies.recordEvidence([{ sourceType: 'drive', sourceId: file.id, content, sourceTimestamp: file.modifiedTime, sourceUrl: url, metadata: { name: file.name, path: file.path, mimeType: file.mimeType } }]);
       context += `--- DOKUMENT / TRANSKRIPT / VORBEREITUNG: "${file.path || file.name}" | Direktlink: ${url}${prepHighlight}${ageNotice} ---\n${trimmedContent}\n\n`;
     }
-    return `${context}\n--- LOKALES MEMORY / HINTERGRUND (gegen aktuelle datierte Quellen prüfen) ---\n${dependencies.loadLocalMemoryContext()}` || '(Keine Dokumente, Meeting-Protokolle oder Transkripte im Google Drive gefunden.)\n';
+    return `${externalContext}${context}\n--- LOKALES MEMORY / HINTERGRUND (gegen aktuelle datierte Quellen prüfen) ---\n${dependencies.loadLocalMemoryContext()}` || '(Keine Dokumente, Meeting-Protokolle oder Transkripte im Google Drive gefunden.)\n';
   } catch (error: any) {
     console.warn('Drive knowledge base fetch notice:', error?.message || error);
     return '(Dokumente / Meeting-Protokolle aus Google Drive konnten nicht geladen werden)\n';
