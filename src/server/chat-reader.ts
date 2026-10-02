@@ -5,8 +5,13 @@ type RecordEvidence = (inputs: any[]) => void;
 export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence, createChatClient = (value: any) => google.chat({ version: 'v1', auth: value })) {
   try {
     const chat = createChatClient(auth);
-    const res = await chat.spaces.list({ pageSize: 50 });
-    const spaces = res.data.spaces || [];
+    const spaces: any[] = [];
+    let spacePageToken: string | undefined;
+    do {
+      const page = await chat.spaces.list({ pageSize: 100, pageToken: spacePageToken });
+      spaces.push(...(page.data.spaces || []));
+      spacePageToken = page.data.nextPageToken || undefined;
+    } while (spacePageToken);
     let context = 'Aktuelle Chat-Räume & Nachrichten:\n';
     for (const space of spaces) {
       if (!space.name) continue;
@@ -14,8 +19,15 @@ export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence
       const chatUrl = `https://chat.google.com/room/${space.name.replace('spaces/', '')}`;
       context += `- ${spaceLabel} | Direktlink: ${chatUrl}\n`;
       try {
-        const messages = await chat.spaces.messages.list({ parent: space.name, pageSize: 25, orderBy: 'createTime desc' });
-        for (const message of messages.data.messages || []) {
+        const messages: any[] = [];
+        let messagePageToken: string | undefined;
+        do {
+          const page = await chat.spaces.messages.list({ parent: space.name, pageSize: 100, pageToken: messagePageToken, orderBy: 'createTime desc' });
+          messages.push(...(page.data.messages || []));
+          messagePageToken = page.data.nextPageToken || undefined;
+        } while (messagePageToken);
+        const recentCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+        for (const message of messages.filter(message => !message.createTime || Date.parse(message.createTime) >= recentCutoff)) {
           const sender = message.sender?.displayName || message.sender?.name || 'User';
           const text = message.text || '(Kein Text)';
           const time = message.createTime ? ` [${new Date(message.createTime).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}]` : '';

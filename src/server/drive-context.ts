@@ -92,7 +92,7 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     for (const file of [...folderFiles, ...broadFiles, ...targetedFiles.flat()]) {
       if (file.id && !fileMap.has(file.id)) fileMap.set(file.id, file.path ? file : { ...file, path: file.name });
     }
-    const cutoff = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
     const eligibleFiles = Array.from(fileMap.values()).filter(file =>
       file.modifiedTime && new Date(file.modifiedTime).getTime() >= cutoff && file.mimeType !== 'application/vnd.google-apps.shortcut' && (
         file.mimeType === 'text/markdown' || file.mimeType === 'text/plain' || file.mimeType === 'text/csv' ||
@@ -108,12 +108,14 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     });
 
     let context = '';
-    for (const file of eligibleFiles.slice(0, 20)) {
+    const meetingFiles = eligibleFiles.filter(file => /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || ''));
+    const supportingFiles = eligibleFiles.filter(file => !meetingFiles.includes(file)).slice(0, 20);
+    for (const file of [...meetingFiles, ...supportingFiles]) {
       const content = await dependencies.getFileContent(drive, file.id, file.mimeType);
       if (typeof content !== 'string') continue;
       const isMeetingDocument = /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || '');
-      const trimmedContent = content.length > 3000 && isMeetingDocument
-        ? `${content.slice(0, 1500)}\n...[Mitte gekürzt]...\n${content.slice(-3000)}`
+      const trimmedContent = isMeetingDocument
+        ? content
         : content.length > 2500 ? `${content.slice(0, 2500)}\n...[Gekürzt bei 2.500 Zeichen]` : content;
       const modified = file.modifiedTime ? new Date(file.modifiedTime) : null;
       const dateLabel = modified ? modified.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }) : '';

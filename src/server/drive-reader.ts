@@ -1,17 +1,23 @@
 export async function listAllFiles(drive: any, folderId: string, pathPrefix = '') {
   let files: any[] = [];
   try {
-    const response = await drive.files.list({
-      q: `'${folderId}' in parents and trashed=false`,
-      fields: 'nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime)',
-    });
-    for (const file of response.data.files || []) {
-      if (file.mimeType === 'application/vnd.google-apps.folder') {
-        files = files.concat(await listAllFiles(drive, file.id, `${pathPrefix}${file.name}/`));
-      } else {
-        files.push({ ...file, path: `${pathPrefix}${file.name}` });
+    let pageToken: string | undefined;
+    do {
+      const response = await drive.files.list({
+        q: `'${folderId}' in parents and trashed=false`,
+        pageToken,
+        pageSize: 1000,
+        fields: 'nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime)',
+      });
+      for (const file of response.data.files || []) {
+        if (file.mimeType === 'application/vnd.google-apps.folder') {
+          files = files.concat(await listAllFiles(drive, file.id, `${pathPrefix}${file.name}/`));
+        } else {
+          files.push({ ...file, path: `${pathPrefix}${file.name}` });
+        }
       }
-    }
+      pageToken = response.data.nextPageToken || undefined;
+    } while (pageToken);
   } catch (error: any) {
     console.warn(`Drive files listing notice in folder ${folderId}:`, error?.message || error);
   }

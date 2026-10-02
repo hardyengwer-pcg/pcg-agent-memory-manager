@@ -5,17 +5,20 @@ type RecordEvidence = (inputs: any[]) => void;
 export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidence, createGmailClient = (value: any) => google.gmail({ version: 'v1', auth: value })) {
   try {
     const gmail = createGmailClient(auth);
-    const res = await gmail.users.messages.list({ userId: 'me', q: 'newer_than:45d -in:trash -in:spam', maxResults: 60, includeSpamTrash: false });
-    const messages = res.data.messages || [];
+    const listMessages = async (q: string) => {
+      const result: any[] = [];
+      let pageToken: string | undefined;
+      do {
+        const page = await gmail.users.messages.list({ userId: 'me', q, maxResults: 100, pageToken, includeSpamTrash: false });
+        result.push(...(page.data.messages || []));
+        pageToken = page.data.nextPageToken || undefined;
+      } while (pageToken);
+      return result;
+    };
+    const messages = await listMessages('newer_than:7d -in:trash -in:spam');
     let targetedMessages: any[] = [];
     try {
-      const targetedRes = await gmail.users.messages.list({
-        userId: 'me',
-        q: 'newer_than:45d -in:trash -in:spam (transcript OR transkript OR "meeting notes" OR protokoll OR summary OR zusammenfassung OR "action items" OR todo OR to-do OR aufgabe OR projekt OR zugewiesen OR "next steps" OR handover OR scoping OR proposal OR sow OR "statement of work" OR "use case" OR "use cases" OR review OR retrospective OR alignment OR sync OR briefing OR absprache OR "Koenig" OR "Bauer" OR "Lorenz" OR "domcura" OR "voestalpine" OR "VOEST" OR "PK" OR "Einarbeitung" OR "Einarbeitungsplan" OR "Onboarding" OR "Mitarbeiter" OR "September" OR "Joiner" OR "Welcome" OR "Schulung")',
-        maxResults: 50,
-        includeSpamTrash: false,
-      });
-      targetedMessages = targetedRes.data.messages || [];
+      targetedMessages = await listMessages('newer_than:7d -in:trash -in:spam (transcript OR transkript OR "meeting notes" OR protokoll OR summary OR zusammenfassung OR "action items" OR todo OR to-do OR aufgabe OR projekt OR zugewiesen OR "next steps" OR handover OR scoping OR proposal OR sow OR "statement of work" OR "use case" OR "use cases" OR review OR retrospective OR alignment OR sync OR briefing OR absprache OR "Koenig" OR "Bauer" OR "Lorenz" OR "domcura" OR "voestalpine" OR "VOEST" OR "PK" OR "Einarbeitung" OR "Einarbeitungsplan" OR "Onboarding" OR "Mitarbeiter" OR "September" OR "Joiner" OR "Welcome" OR "Schulung")');
     } catch (error: any) {
       console.warn('Targeted Gmail query notice:', error?.message || error);
     }
@@ -80,9 +83,13 @@ export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidenc
 
     let context = 'Neueste aktive E-Mails & Transkripte (Posteingang und Archiv; ohne Papierkorb/Spam):\n';
     const nowMs = Date.now();
-    for (const email of parsedEmails) {
+    const contextEmails = parsedEmails.filter(email => {
       const daysOld = email.internalDate ? Math.floor((nowMs - email.internalDate) / (1000 * 60 * 60 * 24)) : 0;
-      if (daysOld > 45 && email.statusStr !== 'Posteingang (Aktiv)') continue;
+      return daysOld <= 14 || email.isTranscriptOrProject;
+    }).slice(0, 120);
+    for (const email of contextEmails) {
+      const daysOld = email.internalDate ? Math.floor((nowMs - email.internalDate) / (1000 * 60 * 60 * 24)) : 0;
+      if (daysOld > 7) continue;
       if (/hibob|stundenzettel|time\s*off/i.test(email.from) || /hibob.*(stundenzettel|approved|submitted|genehmigt|freigabe)/i.test(email.subject)) continue;
       const ageFlag = daysOld > 21 ? ` [⚠️ HISTORISCHE E-MAIL (${daysOld} Tage alt) - VORHER PRÜFEN OB NOCH AKTUELL; NICHT als aktuelle Prio oder neue To-Dos interpretieren]` : daysOld > 7 ? ` [Älterer Thread (${daysOld} Tage alt) - Aktualität vor Erwähnung gegenprüfen]` : '';
       const direction = email.statusStr === 'GESENDET' ? ` | Empfänger: ${email.to || 'unbekannt'} | AUSGANG: Für offene Antworten Follow-up prüfen` : '';

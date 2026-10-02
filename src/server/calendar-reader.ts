@@ -10,15 +10,21 @@ export async function fetchUpcomingEvents(auth: any, recordEvidence: RecordEvide
     const fourteenDaysAhead = new Date();
     fourteenDaysAhead.setDate(fourteenDaysAhead.getDate() + 14);
 
-    const res = await calendar.events.list({
-      calendarId: 'primary',
-      timeMin: sevenDaysAgo.toISOString(),
-      timeMax: fourteenDaysAhead.toISOString(),
-      maxResults: 100,
-      singleEvents: true,
-      orderBy: 'startTime',
-    });
-    const events = res.data.items || [];
+    const events: any[] = [];
+    let pageToken: string | undefined;
+    do {
+      const page = await calendar.events.list({
+        calendarId: 'primary',
+        timeMin: sevenDaysAgo.toISOString(),
+        timeMax: fourteenDaysAhead.toISOString(),
+        maxResults: 2500,
+        pageToken,
+        singleEvents: true,
+        orderBy: 'startTime',
+      });
+      events.push(...(page.data.items || []));
+      pageToken = page.data.nextPageToken || undefined;
+    } while (pageToken);
     const now = new Date();
     const todayISO = now.toISOString().split('T')[0];
     const tomorrow = new Date(now);
