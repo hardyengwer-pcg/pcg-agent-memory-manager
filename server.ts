@@ -287,14 +287,22 @@ async function callOpenAICompatibleGateway(options: {
     body.response_format = { type: 'json_object' };
   }
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${options.apiKey}`
-    },
-    body: JSON.stringify(body)
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 300000);
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${options.apiKey}`
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const textRes = await res.text();
   let jsonRes: any = {};
@@ -394,7 +402,7 @@ export async function generateAIContent(options: {
     const isInvalidModel = fullStr.includes('Invalid model name passed in model=') || fullStr.includes('invalid model') || fullStr.includes('not found') || err?.status === 404;
     const isQuotaError = err?.status === 429 || err?.code === 429 || fullStr.includes('quota') || fullStr.includes('Quota') || fullStr.includes('RESOURCE_EXHAUSTED');
     const isUnavailable = err?.status === 503 || err?.code === 503 || fullStr.includes('503') || fullStr.includes('UNAVAILABLE') || fullStr.includes('high demand');
-    const isNetworkError = fullStr.includes('fetch failed') || fullStr.includes('ECONNRESET') || fullStr.includes('ETIMEDOUT') || fullStr.includes('timed out');
+    const isNetworkError = fullStr.includes('fetch failed') || fullStr.includes('ECONNRESET') || fullStr.includes('ETIMEDOUT') || fullStr.includes('timed out') || fullStr.includes('aborted') || err?.name === 'AbortError';
 
     if (isAccessDenied || isInvalidModel || isQuotaError || isUnavailable || isNetworkError) {
       if (isQuotaError) {
@@ -432,7 +440,7 @@ export async function generateAIContent(options: {
   }
 }
 
-async function generateGeminiContentWithTimeout(ai: any, request: any, timeoutMs = 60000): Promise<any> {
+async function generateGeminiContentWithTimeout(ai: any, request: any, timeoutMs = 300000): Promise<any> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -2634,14 +2642,10 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     // Keep structured memory current on every daily run; operators can disable
     // the AI curation explicitly for maintenance windows.
     if (process.env.ENABLE_DAILY_MEMORY_CURATION !== 'false') {
-      const generatedMemoryFiles = await generateStructuredMemoryConcepts({
-        driveContext,
-        emailsContext,
-        eventsContext,
-        chatsContext,
-        tasksContext,
-        localMemoryContext,
-      });
+      const generatedMemoryFiles = await Promise.race([
+        generateStructuredMemoryConcepts({ driveContext, emailsContext, eventsContext, chatsContext, tasksContext, localMemoryContext }),
+        new Promise<string[]>((_, reject) => setTimeout(() => reject(new Error('Memory-Kuration Timeout nach 300000ms')), 300000)),
+      ]);
       console.log(`[Memory Curation] ${generatedMemoryFiles.length} OKF-Konzept(e) aktualisiert.`);
     } else {
       console.log('[Memory Curation] Im Daily standardmäßig übersprungen; Memory-Sync bleibt aktiv.');

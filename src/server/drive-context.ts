@@ -92,7 +92,8 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     for (const file of [...folderFiles, ...broadFiles, ...targetedFiles.flat()]) {
       if (file.id && !fileMap.has(file.id)) fileMap.set(file.id, file.path ? file : { ...file, path: file.name });
     }
-    const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    const isMeetingFile = (file: any) => /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || '');
     const isReadableFile = (file: any) => file.mimeType === 'text/markdown' || file.mimeType === 'text/plain' || file.mimeType === 'text/csv' ||
       file.mimeType?.includes('google-apps.document') || file.mimeType?.includes('google-apps.spreadsheet') || file.mimeType?.includes('google-apps.presentation') ||
       file.name?.endsWith('.md') || file.name?.endsWith('.txt') || file.name?.endsWith('.csv');
@@ -106,12 +107,12 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     });
 
     let context = '';
-    const meetingFiles = eligibleFiles.filter(file => /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || '')).slice(0, 40);
-    const supportingFiles = eligibleFiles.filter(file => !meetingFiles.includes(file)).slice(0, 20);
+    const meetingFiles = eligibleFiles.filter(file => isMeetingFile(file)).slice(0, 40);
+    const supportingFiles = eligibleFiles.filter(file => !isMeetingFile(file)).slice(0, 20);
     const filesToRead = [...meetingFiles, ...supportingFiles];
     for (let batchStart = 0; batchStart < filesToRead.length; batchStart += 20) {
       const renderedBatch = await Promise.all(filesToRead.slice(batchStart, batchStart + 20).map(async file => {
-      const isMeetingDocument = /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || '');
+      const isMeetingDocument = isMeetingFile(file);
       const content = await dependencies.getFileContent(drive, file.id, file.mimeType, isMeetingDocument ? 60000 : 12000);
       if (typeof content !== 'string') return '';
       const trimmedContent = isMeetingDocument

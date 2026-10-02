@@ -7,25 +7,30 @@ export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence
     const chat = createChatClient(auth);
     const spaces: any[] = [];
     let spacePageToken: string | undefined;
+    let spacePage = 0;
     do {
       const page = await chat.spaces.list({ pageSize: 100, pageToken: spacePageToken });
       spaces.push(...(page.data.spaces || []));
       spacePageToken = page.data.nextPageToken || undefined;
-    } while (spacePageToken);
+      spacePage += 1;
+    } while (spacePageToken && spacePage < 2);
     let context = 'Aktuelle Chat-Räume & Nachrichten:\n';
-    for (const space of spaces) {
-      if (!space.name) continue;
+    for (let batchStart = 0; batchStart < spaces.length; batchStart += 10) {
+      const batchContext = await Promise.all(spaces.slice(batchStart, batchStart + 10).map(async space => {
+      if (!space.name) return '';
       const spaceLabel = space.displayName ? `Raum: "${space.displayName}"` : `Raum: ${space.name}`;
       const chatUrl = `https://chat.google.com/room/${space.name.replace('spaces/', '')}`;
-      context += `- ${spaceLabel} | Direktlink: ${chatUrl}\n`;
+      let spaceContext = `- ${spaceLabel} | Direktlink: ${chatUrl}\n`;
       try {
         const messages: any[] = [];
         let messagePageToken: string | undefined;
+        let messagePage = 0;
         do {
           const page = await chat.spaces.messages.list({ parent: space.name, pageSize: 100, pageToken: messagePageToken, orderBy: 'createTime desc' });
           messages.push(...(page.data.messages || []));
           messagePageToken = page.data.nextPageToken || undefined;
-        } while (messagePageToken);
+          messagePage += 1;
+        } while (messagePageToken && messagePage < 3);
         const recentCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
         for (const message of messages.filter(message => !message.createTime || Date.parse(message.createTime) >= recentCutoff)) {
           const sender = message.sender?.displayName || message.sender?.name || 'User';
@@ -41,11 +46,14 @@ export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence
             parentId: space.name,
             metadata: { spaceName: space.name, spaceLabel },
           }]);
-          context += `   * ${sender}${time}: "${text.replace(/\n+/g, ' ')}"\n`;
+          spaceContext += `   * ${sender}${time}: "${text.replace(/\n+/g, ' ')}"\n`;
         }
       } catch {
         // A listed space may not be readable with the current Chat scope.
       }
+      return spaceContext;
+      }));
+      context += batchContext.join('');
     }
     return context;
   } catch (error: any) {

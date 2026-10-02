@@ -139,9 +139,26 @@ function extractToolJson(result: any): any {
   try { return JSON.parse(text); } catch { return null; }
 }
 
+async function callOdooToolWithRetry(config: RemoteMcpServerConfig, name: string, args: Record<string, unknown>, timeoutMs = 30000) {
+  let lastError: any;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await Promise.race([
+        callRemoteMcpTool(config, name, args),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Odoo MCP ${name} Timeout nach ${timeoutMs}ms`)), timeoutMs)),
+      ]);
+    } catch (error: any) {
+      lastError = error;
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+  }
+  throw lastError || new Error(`Odoo MCP ${name} fehlgeschlagen.`);
+}
+
 export async function fetchOdooProjectStatusContext() {
   try {
     const config = await getConfiguredRemoteMcpServerAsync('odoo-mcp');
+    const callOdoo = (name: string, args: Record<string, unknown>) => callOdooToolWithRetry(config, name, args);
     const projectQueryFields = ['id', 'name', 'active', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'];
     const taskQueryFields = ['id', 'name', 'active', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'];
     const namedProjectAliases = [
@@ -150,19 +167,19 @@ export async function fetchOdooProjectStatusContext() {
       { alias: 'Suse', terms: ['Suse', 'SUSE'] },
     ];
     const [projectsResult, tasksResult, ...aliasAccountResults] = await Promise.all([
-      callRemoteMcpTool(config, 'search_records', { request: {
+      callOdoo('search_records', { request: {
         model: 'project.project',
         domain: [],
         fields: projectQueryFields,
         limit: 100,
       } }),
-      callRemoteMcpTool(config, 'search_records', { request: {
+      callOdoo('search_records', { request: {
         model: 'project.task',
         domain: [],
         fields: taskQueryFields,
         limit: 100,
       } }),
-      ...namedProjectAliases.flatMap(({ terms }) => terms.map(term => callRemoteMcpTool(config, 'search_records', { request: {
+      ...namedProjectAliases.flatMap(({ terms }) => terms.map(term => callOdoo('search_records', { request: {
         model: 'account.analytic.account',
         domain: [{ field: 'name', operator: 'ilike', value: term }],
         fields: ['id', 'name', 'partner_id'],
@@ -175,13 +192,13 @@ export async function fetchOdooProjectStatusContext() {
         .filter(account => namePattern.test(`${account.name || ''} ${Array.isArray(account.partner_id) ? account.partner_id[1] : account.partner_id || ''}`));
       const accountIds = [...new Set(accountRecords.map(account => account.id).filter(Boolean))];
       const aliasSearchResults = await Promise.all([
-        ...terms.map(term => callRemoteMcpTool(config, 'search_records', { request: {
+        ...terms.map(term => callOdoo('search_records', { request: {
           model: 'project.project',
           domain: [{ field: 'name', operator: 'ilike', value: term }],
           fields: projectQueryFields,
           limit: 100,
         } })),
-        accountIds.length > 0 ? callRemoteMcpTool(config, 'search_records', { request: {
+        accountIds.length > 0 ? callOdoo('search_records', { request: {
           model: 'project.project',
           domain: [{ field: 'account_id', operator: 'in', value: accountIds }],
           fields: projectQueryFields,
@@ -195,14 +212,14 @@ export async function fetchOdooProjectStatusContext() {
         .filter((project, index, all) => all.findIndex(other => other.id === project.id) === index);
       return { alias, records };
     }));
-    const [dataTagResult, aiTagResult] = await Promise.all(['Data', 'AI'].map(tag => callRemoteMcpTool(config, 'search_records', { request: {
+    const [dataTagResult, aiTagResult] = await Promise.all(['Data', 'AI'].map(tag => callOdoo('search_records', { request: {
       model: 'documents.tag',
       domain: [{ field: 'name', operator: 'ilike', value: tag }],
       fields: ['id', 'name'],
       limit: 100,
     } })));
     const dataAiTagIds = [...new Set([...extractToolRecords(dataTagResult), ...extractToolRecords(aiTagResult)].map(tag => tag.id).filter(Boolean))];
-    const taggedProjectsResult = dataAiTagIds.length > 0 ? await callRemoteMcpTool(config, 'search_records', { request: {
+    const taggedProjectsResult = dataAiTagIds.length > 0 ? await callOdoo('search_records', { request: {
       model: 'project.project',
       domain: [{ field: 'documents_tag_ids', operator: 'in', value: dataAiTagIds }],
       fields: ['id', 'name', 'documents_tag_ids'],
@@ -210,7 +227,7 @@ export async function fetchOdooProjectStatusContext() {
     } }) : null;
     const taggedProjects = extractToolRecords(taggedProjectsResult);
     const taggedProjectIds = taggedProjects.map(project => project.id).filter(Boolean);
-    const taggedTasksResult = taggedProjectIds.length > 0 ? await callRemoteMcpTool(config, 'search_records', { request: {
+    const taggedTasksResult = taggedProjectIds.length > 0 ? await callOdoo('search_records', { request: {
       model: 'project.task',
       domain: [{ field: 'project_id', operator: 'in', value: taggedProjectIds }],
       fields: ['id', 'name', 'active', 'project_id', 'activity_user_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'],
@@ -222,7 +239,7 @@ export async function fetchOdooProjectStatusContext() {
     const monthStartISO = monthStart.toISOString().slice(0, 10);
     const todayISO = new Date().toISOString().slice(0, 10);
     const squadNames = ['Hardy Engwer', 'Anne Lendl', 'Arpit Gothwal', 'Baran Ege', 'Barbara Faulstich', 'Enrico Goerlitz', 'Julius Otto', 'Klemens Wisser', 'Mario Pasculli', 'Nils Traut', 'Paul Grillenberger', 'Sudipt Panda', 'Juan José Valenzuela Morales', 'Michael Zeiner', 'Peter Eichinger', 'Timo Dempwolf', 'Christian Zierer'];
-    const allUsersResult = await callRemoteMcpTool(config, 'search_records', { request: {
+    const allUsersResult = await callOdoo('search_records', { request: {
       model: 'res.users',
       fields: ['id', 'name'],
       limit: 100,
@@ -232,7 +249,7 @@ export async function fetchOdooProjectStatusContext() {
     const squadUserIds = squadUsers.map(user => user.id).filter(Boolean);
     const squadBookingResults: any[] = [];
     for (let offset = 0; offset < 500; offset += 100) {
-      const page = await callRemoteMcpTool(config, 'search_records', { request: {
+      const page = await callOdoo('search_records', { request: {
       model: 'account.analytic.line',
       domain: [
         { field: 'date', operator: '>=', value: monthStartISO },
@@ -249,14 +266,14 @@ export async function fetchOdooProjectStatusContext() {
     }
     const squadBookings = squadBookingResults.filter(line => Array.isArray(line.project_id) && Number(line.unit_amount) > 0 && !/pcg global|pcg int\.? projects|^intern(?:al)?$|jira sync|^support$/i.test(line.project_id[1] || ''));
     const bookedProjectIds = [...new Set(squadBookings.map(line => line.project_id[0]).filter(Boolean))];
-    const bookedProjectsResult = bookedProjectIds.length > 0 ? await callRemoteMcpTool(config, 'search_records', { request: {
+    const bookedProjectsResult = bookedProjectIds.length > 0 ? await callOdoo('search_records', { request: {
       model: 'project.project',
       domain: [{ field: 'id', operator: 'in', value: bookedProjectIds }],
       fields: ['id', 'name', 'allocated_hours', 'effective_hours'],
       limit: 100,
     } }) : null;
     const bookedProjects = new Map(extractToolRecords(bookedProjectsResult).map(project => [project.id, project]));
-    const hardyPmProjectsResult = await callRemoteMcpTool(config, 'search_records', { request: {
+    const hardyPmProjectsResult = await callOdoo('search_records', { request: {
       model: 'project.project',
       domain: [{ field: 'additional_manager_ids', operator: 'in', value: [13566] }],
       fields: ['id', 'name', 'allocated_hours', 'effective_hours'],
@@ -320,7 +337,7 @@ export async function fetchOdooProjectStatusContext() {
       return `- ${user}: ${value.projects.size} aktuelle Projekte | Monatsbuchungen: ${value.hours.toFixed(2)}h | früheste Reststunden-Prognose: ${nextForecast}${warning}`;
     }).join('\n');
     const aliasTaskResults = await Promise.all(namedProjectAliases.map(({ terms }) => Promise.all(
-      terms.map(term => callRemoteMcpTool(config, 'search_records', { request: {
+      terms.map(term => callOdoo('search_records', { request: {
         model: 'project.task',
         domain: [{ field: 'name', operator: 'ilike', value: term }],
         fields: ['id', 'name', 'active', 'project_id', 'activity_user_id', 'stage_id'],
@@ -350,9 +367,15 @@ export async function fetchOdooProjectStatusContext() {
       return `- ${alias}: ${allRecords.length > 0 ? allRecords.map(project => `Odoo-Projekt-ID ${project.id} | exakter Odoo-Name: ${project.name}`).join(' || ') : '(kein eindeutiger Odoo-Treffer)'}`;
     }).join('\n');
     const taggedProjectLines = taggedProjects.map(project => `- Odoo-Projekt-ID ${project.id} | exakter Odoo-Name: ${project.name}`).join('\n');
-    return `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\n[Quelle: Odoo MCP – project.project / project.task / account.analytic.line](https://odoo-mcp.gateway.pcg.io/mcp/)\nVERBINDLICHE NAMENSZUORDNUNG FÜR DEN BERICHT (immer den exakten Odoo-Namen verwenden):\n${aliasLines}\nHARDY-PM-PROJEKTE IM LAUFENDEN MONAT (Odoo additional_manager_ids, Hardy-ID 13566):\n${hardyPmLines || '(Keine Hardy-PM-Projekte mit aktueller Squad-Buchung gefunden.)'}\nKAPAZITÄTSAUSBLICK SQUAD (aktuelle Monatsbuchungen):\n${capacityLines || '(Keine aktuellen Squad-Buchungen gefunden.)'}\nPROJEKTE DER SQUAD IM LAUFENDEN MONAT (Zuordnung über tatsächliche Odoo-Zeitbuchungen; Hardy ist ausdrücklich enthalten):\n${squadBookingLines || '(Keine aktuellen Odoo-Zeitbuchungen der konfigurierten Squad-Mitglieder gefunden.)'}\nDie Prognose ist eine Näherung aus dem bisherigen Monatsverbrauch, keine verbindliche Lieferzusage.\nDATA/AI-PROJEKTPOOL UND SQUAD-TASK-ZUORDNUNG (project_id ist die führende Zuordnung):\n${taggedProjectLines || '(Keine Data/AI-getaggten Odoo-Projekte geliefert.)'}\n${dataAiTaskLines || '(Keine aktiven Tasks zu Data/AI-Projekten geliefert.)'}\nPROJEKTE / KUNDEN / RESTSTUNDEN:\n${projectLines || '(Keine aktiven Odoo-Projekte geliefert.)'}\nAKTIVE TASKS / ZEITERFASSUNG:\n${taskLines || '(Keine aktiven Odoo-Tasks geliefert.)'}\n`;
+    const context = `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\n[Quelle: Odoo MCP – project.project / project.task / account.analytic.line](https://odoo-mcp.gateway.pcg.io/mcp/)\nVERBINDLICHE NAMENSZUORDNUNG FÜR DEN BERICHT (immer den exakten Odoo-Namen verwenden):\n${aliasLines}\nHARDY-PM-PROJEKTE IM LAUFENDEN MONAT (Odoo additional_manager_ids, Hardy-ID 13566):\n${hardyPmLines || '(Keine Hardy-PM-Projekte mit aktueller Squad-Buchung gefunden.)'}\nKAPAZITÄTSAUSBLICK SQUAD (aktuelle Monatsbuchungen):\n${capacityLines || '(Keine aktuellen Squad-Buchungen gefunden.)'}\nPROJEKTE DER SQUAD IM LAUFENDEN MONAT (Zuordnung über tatsächliche Odoo-Zeitbuchungen; Hardy ist ausdrücklich enthalten):\n${squadBookingLines || '(Keine aktuellen Odoo-Zeitbuchungen der konfigurierten Squad-Mitglieder gefunden.)'}\nDie Prognose ist eine Näherung aus dem bisherigen Monatsverbrauch, keine verbindliche Lieferzusage.\nDATA/AI-PROJEKTPOOL UND SQUAD-TASK-ZUORDNUNG (project_id ist die führende Zuordnung):\n${taggedProjectLines || '(Keine Data/AI-getaggten Odoo-Projekte geliefert.)'}\n${dataAiTaskLines || '(Keine aktiven Tasks zu Data/AI-Projekten geliefert.)'}\nPROJEKTE / KUNDEN / RESTSTUNDEN:\n${projectLines || '(Keine aktiven Odoo-Projekte geliefert.)'}\nAKTIVE TASKS / ZEITERFASSUNG:\n${taskLines || '(Keine aktiven Odoo-Tasks geliefert.)'}\n`;
+    fs.writeFileSync('.odoo-project-context-cache.json', JSON.stringify({ updatedAt: new Date().toISOString(), context }), 'utf8');
+    return context;
   } catch (error: any) {
     console.warn('Odoo MCP project context notice:', error?.message || error);
+    try {
+      const cached = JSON.parse(fs.readFileSync('.odoo-project-context-cache.json', 'utf8'));
+      if (cached.context) return `${cached.context}\n[Hinweis: Odoo-MCP aktuell nicht erreichbar; letzter erfolgreicher Odoo-Stand: ${cached.updatedAt || 'unbekannt'}]\n`;
+    } catch {}
     return '(Odoo-MCP-Projektkontext nicht verfügbar; keine Odoo-Fakten ableiten.)\n';
   }
 }
