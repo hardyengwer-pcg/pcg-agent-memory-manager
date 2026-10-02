@@ -222,24 +222,32 @@ export async function fetchOdooProjectStatusContext() {
     const monthStartISO = monthStart.toISOString().slice(0, 10);
     const todayISO = new Date().toISOString().slice(0, 10);
     const squadNames = ['Hardy Engwer', 'Anne Lendl', 'Arpit Gothwal', 'Baran Ege', 'Barbara Faulstich', 'Enrico Goerlitz', 'Julius Otto', 'Klemens Wisser', 'Mario Pasculli', 'Nils Traut', 'Paul Grillenberger', 'Sudipt Panda', 'Juan José Valenzuela Morales', 'Michael Zeiner', 'Peter Eichinger', 'Timo Dempwolf', 'Christian Zierer'];
-    const squadUserResults = await Promise.all(squadNames.map(name => callRemoteMcpTool(config, 'search_records', { request: {
+    const allUsersResult = await callRemoteMcpTool(config, 'search_records', { request: {
       model: 'res.users',
-      domain: [{ field: 'name', operator: 'ilike', value: name }],
       fields: ['id', 'name'],
-      limit: 5,
-    } })));
-    const squadUsers = squadUserResults.flatMap(extractToolRecords).filter((user, index, all) => all.findIndex(other => other.id === user.id) === index);
-    const squadBookingResults = await Promise.all(squadUsers.map(user => callRemoteMcpTool(config, 'search_records', { request: {
+      limit: 100,
+    } });
+    const normalizedSquadNames = new Set(squadNames.map(name => name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()));
+    const squadUsers = extractToolRecords(allUsersResult).filter(user => normalizedSquadNames.has(String(user.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()));
+    const squadUserIds = squadUsers.map(user => user.id).filter(Boolean);
+    const squadBookingResults: any[] = [];
+    for (let offset = 0; offset < 500; offset += 100) {
+      const page = await callRemoteMcpTool(config, 'search_records', { request: {
       model: 'account.analytic.line',
       domain: [
         { field: 'date', operator: '>=', value: monthStartISO },
         { field: 'date', operator: '<=', value: todayISO },
-        { field: 'user_id', operator: '=', value: user.id },
+        { field: 'user_id', operator: 'in', value: squadUserIds },
       ],
       fields: ['id', 'date', 'project_id', 'user_id', 'unit_amount'],
+      offset,
       limit: 100,
-    } })));
-    const squadBookings = squadBookingResults.flatMap(extractToolRecords).filter(line => Array.isArray(line.project_id) && Number(line.unit_amount) > 0 && !/pcg global|pcg int\.? projects|^intern(?:al)?$|jira sync|^support$/i.test(line.project_id[1] || ''));
+      } });
+      const records = extractToolRecords(page);
+      squadBookingResults.push(...records);
+      if (records.length < 100) break;
+    }
+    const squadBookings = squadBookingResults.filter(line => Array.isArray(line.project_id) && Number(line.unit_amount) > 0 && !/pcg global|pcg int\.? projects|^intern(?:al)?$|jira sync|^support$/i.test(line.project_id[1] || ''));
     const bookedProjectIds = [...new Set(squadBookings.map(line => line.project_id[0]).filter(Boolean))];
     const bookedProjectsResult = bookedProjectIds.length > 0 ? await callRemoteMcpTool(config, 'search_records', { request: {
       model: 'project.project',

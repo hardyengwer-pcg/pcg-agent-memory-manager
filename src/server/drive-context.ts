@@ -54,7 +54,7 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     ];
     const externalContents = await Promise.all(externalPlaybooks.map(async source => ({
       source,
-      content: await dependencies.getFileContent(drive, source.id, 'application/vnd.google-apps.document', 30000),
+      content: await dependencies.getFileContent(drive, source.id, 'application/vnd.google-apps.document', 120000),
     })));
     const externalContext = externalContents.filter(item => item.content).map(({ source, content }) => {
       dependencies.recordEvidence([{ sourceType: 'drive', sourceId: source.id, content: content!, sourceTimestamp: new Date().toISOString(), sourceUrl: source.url, metadata: { name: source.name, external: true } }]);
@@ -93,13 +93,11 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
       if (file.id && !fileMap.has(file.id)) fileMap.set(file.id, file.path ? file : { ...file, path: file.name });
     }
     const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    const isReadableFile = (file: any) => file.mimeType === 'text/markdown' || file.mimeType === 'text/plain' || file.mimeType === 'text/csv' ||
+      file.mimeType?.includes('google-apps.document') || file.mimeType?.includes('google-apps.spreadsheet') || file.mimeType?.includes('google-apps.presentation') ||
+      file.name?.endsWith('.md') || file.name?.endsWith('.txt') || file.name?.endsWith('.csv');
     const eligibleFiles = Array.from(fileMap.values()).filter(file =>
-      file.modifiedTime && new Date(file.modifiedTime).getTime() >= cutoff && file.mimeType !== 'application/vnd.google-apps.shortcut' && (
-        file.mimeType === 'text/markdown' || file.mimeType === 'text/plain' || file.mimeType === 'text/csv' ||
-        file.mimeType?.includes('google-apps.document') || file.mimeType?.includes('google-apps.spreadsheet') || file.mimeType?.includes('google-apps.presentation') ||
-        file.name?.endsWith('.md') || file.name?.endsWith('.txt') || file.name?.endsWith('.csv') ||
-        /einarbeitung|onboarding|mitarbeiter|plan|september|welcome|joiner|schulung|training|squad|data|schwarz|dsv|vorbereitung|use\s*case|protokoll|transkript|transcript|meeting|notes|briefing|koenig|bauer|pk|lorenz|domcura|voest|alpine/i.test(file.name || '')
-      )
+      file.modifiedTime && new Date(file.modifiedTime).getTime() >= cutoff && file.mimeType !== 'application/vnd.google-apps.shortcut' && isReadableFile(file)
     );
     eligibleFiles.sort((a, b) => {
       const aMeeting = /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(a.name || a.path || '');
@@ -108,12 +106,14 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     });
 
     let context = '';
-    const meetingFiles = eligibleFiles.filter(file => /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || ''));
+    const meetingFiles = eligibleFiles.filter(file => /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || '')).slice(0, 40);
     const supportingFiles = eligibleFiles.filter(file => !meetingFiles.includes(file)).slice(0, 20);
-    for (const file of [...meetingFiles, ...supportingFiles]) {
-      const content = await dependencies.getFileContent(drive, file.id, file.mimeType);
-      if (typeof content !== 'string') continue;
+    const filesToRead = [...meetingFiles, ...supportingFiles];
+    for (let batchStart = 0; batchStart < filesToRead.length; batchStart += 20) {
+      const renderedBatch = await Promise.all(filesToRead.slice(batchStart, batchStart + 20).map(async file => {
       const isMeetingDocument = /transkript|transcript|meeting|notes|protokoll|besprechung/i.test(file.name || file.path || '');
+      const content = await dependencies.getFileContent(drive, file.id, file.mimeType, isMeetingDocument ? 60000 : 12000);
+      if (typeof content !== 'string') return '';
       const trimmedContent = isMeetingDocument
         ? content
         : content.length > 2500 ? `${content.slice(0, 2500)}\n...[Gekürzt bei 2.500 Zeichen]` : content;
@@ -133,7 +133,9 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
       const prepHighlight = isCustomerPrep ? ' [⭐ KUNDEN-VORBEREITUNGS-DOKUMENT]' : '';
       const url = file.webViewLink || (file.mimeType?.includes('google-apps.document') ? `https://docs.google.com/document/d/${file.id}/edit` : file.mimeType?.includes('google-apps.spreadsheet') ? `https://docs.google.com/spreadsheets/d/${file.id}/edit` : `https://drive.google.com/file/d/${file.id}/view`);
       dependencies.recordEvidence([{ sourceType: 'drive', sourceId: file.id, content, sourceTimestamp: file.modifiedTime, sourceUrl: url, metadata: { name: file.name, path: file.path, mimeType: file.mimeType } }]);
-      context += `--- DOKUMENT / TRANSKRIPT / VORBEREITUNG: "${file.path || file.name}" | Direktlink: ${url}${prepHighlight}${ageNotice} ---\n${trimmedContent}\n\n`;
+      return `--- DOKUMENT / TRANSKRIPT / VORBEREITUNG: "${file.path || file.name}" | Direktlink: ${url}${prepHighlight}${ageNotice} ---\n${trimmedContent}\n\n`;
+      }));
+      context += renderedBatch.filter(Boolean).join('');
     }
     return `${externalContext}${context}\n--- LOKALES MEMORY / HINTERGRUND (gegen aktuelle datierte Quellen prüfen) ---\n${dependencies.loadLocalMemoryContext()}` || '(Keine Dokumente, Meeting-Protokolle oder Transkripte im Google Drive gefunden.)\n';
   } catch (error: any) {
