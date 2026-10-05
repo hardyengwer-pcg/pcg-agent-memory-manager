@@ -18,8 +18,9 @@ export function enrichTimestampTranscriptLinks(driveContext: string, eventsConte
     (block, name, body) => {
       const timestamp = name.match(/Transkript_(\d{4}-\d{2}-\d{2})[_-](\d{2})[-:](\d{2})/i) || body.match(/(?:generated on|erstellt am|generiert am)\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4}),?\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
       if (!timestamp || events.length === 0) return `${block}\n[TRANSKRIPT-ZUORDNUNG: ungeklärt – kein passender Kalenderzeitpunkt ermittelbar]`;
+      const berlinOffset = timestamp[1].slice(5, 7) >= '03' && timestamp[1].slice(5, 7) <= '10' ? '+02:00' : '+01:00';
       const transcriptTime = timestamp[1].includes('-')
-        ? Date.parse(`${timestamp[1]}T${timestamp[2]}:${timestamp[3]}:00`)
+        ? Date.parse(`${timestamp[1]}T${timestamp[2]}:${timestamp[3]}:00${berlinOffset}`)
         : Date.parse(`${timestamp[1]} ${timestamp[2]}:${timestamp[3]} ${timestamp[4] || ''}`);
       const transcriptText = body.slice(0, 1800).toLowerCase();
       const candidates = events.map(event => {
