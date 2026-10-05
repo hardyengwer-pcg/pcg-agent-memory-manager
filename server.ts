@@ -1110,6 +1110,18 @@ export function extractProjectCapacityEvidence(driveContext: string, emailsConte
   return [...sourceBlocks, messageLines.join('\n')].filter(Boolean).join('\n\n') || '(Keine projekt- oder kapazitätsbezogenen Quellen gefunden.)';
 }
 
+function compactEvidenceForDaily(context: string, maxCharsPerBlock = 4200): string {
+  if (!context || context.length <= 120000) return context;
+  const blocks = context.match(/--- [^\n]+[\s\S]*?(?=\n--- |$)/g);
+  if (!blocks?.length) return `${context.slice(0, 70000)}\n...[Evidence gekürzt]\n${context.slice(-50000)}`;
+  return blocks.map(block => {
+    if (/EXTERNE PLAYBOOK|REGELQUELLE|LOKALES MEMORY/i.test(block)) return block;
+    if (block.length <= maxCharsPerBlock) return block;
+    const actionLines = block.split(/\r?\n/).filter(line => /hardy|nächste schritte|next steps|action|todo|aufgabe|offen|entscheidung|vorbereit|owner|fällig/i.test(line)).join('\n');
+    return `${block.slice(0, 1200)}\n...[Mitte im Daily-Prompt gekürzt; Quelle vollständig gelesen]\n${actionLines.slice(0, 1400)}\n${block.slice(-1500)}`;
+  }).join('\n\n');
+}
+
 export function sanitizeCurrentSquadCapacityClaims(text: string, currentSquadSignals: string): string {
   const sourceUrl = currentSquadSignals.match(/Direktlink:\s*(https?:\S+)/i)?.[1];
   const capacityClaim = /(?:\*\*)?\b([A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+(?:\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+){0,2})(?:\*\*)?\s+(?:ist|sind)\s+(voll ausgelastet(?:\s*\/\s*regulär im Einsatz)?|unausgelastet|im Bench|auf Bench|ohne Auslastung|hat keine Kapazität|hat freie Kapazität)/gi;
@@ -1465,7 +1477,7 @@ function ensureCriticalProjectTasks(summary: string, sourceContext: string, task
   }
 
   const taskStates = extractGoogleTaskStates(tasksContext);
-  if (taskStates.open.some(task => areTaskTextsSimilar(wireguardTitle, task) || /wireguard|timo\s+dempwolf/i.test(task) || /public\s+keys?.*hha|hha.*public\s+keys?/i.test(task))) {
+  if ([...taskStates.open, ...taskStates.completed].some(task => areTaskTextsSimilar(wireguardTitle, task) || /wireguard|timo\s+dempwolf/i.test(task) || /public\s+keys?.*hha|hha.*public\s+keys?/i.test(task))) {
     return summary;
   }
 
@@ -1549,6 +1561,31 @@ export function ensureActionSectionTasks(summary: string, tasksContext: string, 
   }
 
   const additions: any[] = [];
+  const addAction = (title: string, details: string) => {
+    const cleanedTitle = title.replace(/\s+/g, ' ').trim().replace(/[.;]+$/, '');
+    if (!cleanedTitle || cleanedTitle.length < 12 || /keine (gesonderte|separate)|bereits (vorbereitet|geklärt)|nur im termin|keine offenen/i.test(cleanedTitle)) return;
+    const alreadyRepresented = [...taskStates.open, ...taskStates.completed].some(task => areTaskTextsSimilar(cleanedTitle, task)) ||
+      proposals.some(proposal => proposal?.type === 'task' && areTaskTextsSimilar(cleanedTitle, proposal.details?.title || proposal.title || '')) ||
+      additions.some(proposal => areTaskTextsSimilar(cleanedTitle, proposal.details?.title || proposal.title || ''));
+    if (alreadyRepresented) return;
+    additions.push({
+      id: `section-task-${additions.length + 1}`,
+      type: 'task',
+      title: cleanedTitle,
+      details: { title: cleanedTitle, notes: details.trim() || `Konkrete Aktion aus dem Daily: ${cleanedTitle}`, dueDate: fallbackDueDate },
+    });
+  };
+
+  for (const sectionMatch of summary.matchAll(/^## [^\n]+[\s\S]*?(?=^## |$)/gm)) {
+    const section = sectionMatch[0];
+    for (const actionMatch of section.matchAll(/(?:Vorbereitungs-Status(?:\s*&\s*To-Dos)?|Vorbereitungsbedarf|Offene Entscheidung|Nächste Schritte):\s*([^\n]+)/gi)) {
+      const detail = actionMatch[1].trim();
+      if (/\b(muss|soll|prüf|kl[äa]r|vorbereit|abstimm|nachfass|kontakt|einrichten|final|sicherstellen|übermitteln|erstellen|durchführen|einholen|anfordern|prüfen|bearbeiten|planen|terminieren|festlegen|freigeben|nachhalten)\b/i.test(detail)) {
+        addAction(detail, `Konkrete Aktion aus dem Bericht: ${detail}`);
+      }
+    }
+  }
+
   for (const sectionTitle of ['## 5. 🚨 Dringende Klärungen & Projekt-To-dos', '## 6. 💡 Weitere nächste Schritte']) {
     const sectionStart = summary.indexOf(sectionTitle);
     if (sectionStart < 0) continue;
@@ -1562,17 +1599,7 @@ export function ensureActionSectionTasks(summary: string, tasksContext: string, 
       if (!title || /^(Weitere nächste Schritte|Dringende Klärungen)/i.test(title)) continue;
       const dueDate = match[2] || fallbackDueDate;
       const details = match[0].replace(/^- \*\*.+?\*\*/, '').replace(/—\s+Fälligkeit:\s+\d{4}-\d{2}-\d{2}/, '').replace(/\s+/g, ' ').trim();
-      const proposalText = `${title} ${details}`;
-      const alreadyRepresented = [...taskStates.open, ...taskStates.completed].some(task => areTaskTextsSimilar(title, task)) ||
-        proposals.some(proposal => proposal?.type === 'task' && areTaskTextsSimilar(title, proposal.details?.title || proposal.title || '')) ||
-        additions.some(proposal => areTaskTextsSimilar(title, proposal.details?.title || proposal.title || ''));
-      if (alreadyRepresented) continue;
-      additions.push({
-        id: `section-task-${additions.length + 1}`,
-        type: 'task',
-        title,
-        details: { title, notes: details || `Konkrete Aktion aus dem Daily-Abschnitt: ${title}`, dueDate },
-      });
+      addAction(title, details || `Konkrete Aktion aus dem Daily-Abschnitt: ${title}`);
     }
   }
 
@@ -2471,6 +2498,9 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
   ]);
 
   const nowStr = new Date().toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' });
+  const compactDriveContext = compactEvidenceForDaily(enrichedDriveContext);
+  const compactEmailsContext = compactEvidenceForDaily(emailsContext, 3000);
+  const compactChatsContext = compactEvidenceForDaily(chatsContext, 3000);
 
   const prompt = `Erstelle ein fokussiertes, tägliches Management-Briefing und Update basierend auf allen verknüpften Quellen (Google Drive Dokumente & Meeting-Protokolle, E-Mails, Kalender, Google Chat und Google Tasks).
 
@@ -2537,16 +2567,16 @@ ${skillContext}
   • [Quelle: <Name>](<URL>)
 
 --- GOOGLE DRIVE (MEETING NOTES & DOKUMENTE) ---
-${enrichedDriveContext}
+ ${compactDriveContext}
 
 --- E-MAILS ---
-${emailsContext}
+ ${compactEmailsContext}
 
 --- KALENDER ---
 ${eventsContext}
 
 --- CHATS ---
-${chatsContext}
+ ${compactChatsContext}
 
 --- AKTUELLE SQUAD-SIGNALE AUS DATIERTEN QUELLEN ---
 ${currentSquadSignals}
@@ -2623,12 +2653,6 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
     sanitizeActionProposals(response.text || "Kein Update generiert.", tasksContext, eventsContext),
     currentSquadSignals,
   ));
-  summary = ensureCriticalProjectTasks(
-    summary,
-    `${enrichedDriveContext}\n${emailsContext}\n${chatsContext}`,
-    tasksContext,
-    dateStr,
-  );
   summary = ensureMeetingProtocolTasks(
     summary,
     `${enrichedDriveContext}\n${emailsContext}\n${chatsContext}`,
