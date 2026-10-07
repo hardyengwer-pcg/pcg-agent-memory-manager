@@ -20,7 +20,7 @@ import { enrichTimestampTranscriptLinks, fetchDriveKnowledgeBaseContext as readD
 import { getEffectiveApiConfig, getModelName, isValidApiKey, loadAISettings, normalizeAiBaseUrl, saveAISettings } from './src/server/ai-config.ts';
 import { recordVerbatimEvidence } from './src/server/evidence.ts';
 import { validateTextField } from './src/server/input-validation.ts';
-import { fetchAtlassianJiraStatusContext, fetchOdooProjectStatusContext } from './src/server/remote-mcp.ts';
+import { callRemoteMcpTool, fetchAtlassianJiraStatusContext, fetchOdooProjectStatusContext, getConfiguredRemoteMcpServerAsync } from './src/server/remote-mcp.ts';
 
 export { fetchTasks };
 
@@ -604,6 +604,9 @@ app.post('/api/token-sync', (req, res) => {
 export const driveFolderId = '1YK8hW4LWtZdmLW-hLcs9fFX_jFz3teOB';
 export const driveMeetRecordingsFolderId = '1iX0fNTKFoF-LPeu2LFGIhFzgEKfj8Lws';
 export const driveTranscriptFolderId = '1Hk053rZZhE720Ri5uVdGPwYOYQ36tpHT';
+const CONFLUENCE_MEMORY_PARENT_ID = '3328508017';
+const CONFLUENCE_MEMORY_CLOUD_ID = 'e1fc84dd-5e15-41d8-b1a3-4b9038636cae';
+const CONFLUENCE_MEMORY_SPACE_ID = '~71202086e31aeb26de405a845989f5cda2a392';
 
 export function getOAuth2Client(accessToken: string) {
   const oauth2Client = new google.auth.OAuth2();
@@ -821,6 +824,9 @@ function renderStructuredMemoryConcept(concept: StructuredMemoryConcept, generat
     `description: ${clean(concept.description || concept.title)}`,
     `tags: [${tags.join(', ')}]`,
     `status: ${concept.status || 'stable'}`,
+    `memory_category: ${concept.category}`,
+    `updated_at: ${generatedAt}`,
+    `source_count: ${sources.length}`,
     `generated: { by: process:pcg-agent-memory-manager, at: ${generatedAt} }`,
     `verified: { by: process:pcg-agent-memory-manager, at: ${generatedAt} }`,
   ];
@@ -1629,6 +1635,44 @@ function ensureMcpSourceMentions(summary: string, odooContext: string, jiraConte
     ? `\n### Jira-Projektabgleich\n${jiraIssueLines.join('\n')}\n[Quelle: Atlassian MCP](https://mcp.atlassian.com/v1/mcp/authv2)\n`
     : '';
   return summary.replace(statusHeader, `\n${mentions.join('\n')}\n${statusHeader}${odooOverview}${jiraOverview}`);
+}
+
+async function publishDailyStatusToConfluence(summary: string, dateStr: string): Promise<void> {
+  try {
+    const config = await getConfiguredRemoteMcpServerAsync('atlassian');
+    const findPage = async (title: string) => {
+      const search = await callRemoteMcpTool(config, 'searchConfluenceUsingCql', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, cql: `title = "${title}"`, limit: 10 });
+      const text = search.content?.find((item: any) => item.type === 'text')?.text || '';
+      const data = JSON.parse(text || '{}');
+      return Array.isArray(data.results) ? (data.results.find((result: any) => (result.content || result).id)?.content || data.results.find((result: any) => (result.content || result).id)) : null;
+    };
+    const ensurePage = async (title: string, parentId: string, body: string) => {
+      const existing = await findPage(title);
+      if (existing?.id) return String(existing.id);
+      const created = await callRemoteMcpTool(config, 'createConfluencePage', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, spaceId: CONFLUENCE_MEMORY_SPACE_ID, parentId, title, contentFormat: 'markdown', body });
+      const text = created.content?.find((item: any) => item.type === 'text')?.text || '';
+      return String(JSON.parse(text || '{}').id || '');
+    };
+    const dailyRootId = await ensurePage('Daily Project Status', CONFLUENCE_MEMORY_PARENT_ID, '# Daily Project Status\n\nAutomatisch gepflegte Tagesseiten für Projektstatus, Reststunden, Prognosen und Quellen.');
+    if (!dailyRootId) throw new Error('Confluence-Parent für Daily Project Status konnte nicht angelegt werden.');
+    const datePageId = await ensurePage(dateStr, dailyRootId, `# Daily Project Status ${dateStr}\n\n${cleanContentForEmail(summary)}`);
+    if (!datePageId) throw new Error(`Confluence-Tagesseite ${dateStr} konnte nicht angelegt werden.`);
+    const blocks = summary.match(/^- \*\*[\s\S]*?(?=^- \*\*|^## |$)/gm) || [];
+    const projectDir = path.join(process.cwd(), 'agent-memory', 'projects');
+    if (fs.existsSync(projectDir)) {
+      for (const fileName of fs.readdirSync(projectDir).filter(name => name.endsWith('.md'))) {
+        const memory = fs.readFileSync(path.join(projectDir, fileName), 'utf8');
+        const title = memory.match(/^title:\s*(.+)$/m)?.[1]?.trim() || fileName.replace(/\.md$/, '');
+        const terms = title.toLowerCase().split(/[^a-z0-9äöüß]+/i).filter(term => term.length >= 4);
+        const dailyBlocks = blocks.filter(block => terms.some(term => block.toLowerCase().includes(term))).join('\n\n');
+        const body = `${memory}\n\n## Daily-Auszug ${dateStr}\n\n${dailyBlocks || 'Für dieses Projekt wurde im aktuellen Daily kein eigener Statusblock erzeugt.'}`;
+        await ensurePage(title, datePageId, body);
+      }
+    }
+    console.log(`[Confluence] Daily-Hierarchie aktualisiert: Daily Project Status/${dateStr}`);
+  } catch (error: any) {
+    console.warn('[Confluence] Daily-Seite konnte nicht angelegt werden:', error?.message || error);
+  }
 }
 
 function convertMarkdownTablesToCleanText(text: string): string {
@@ -2661,6 +2705,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
   );
   summary = ensureActionSectionTasks(summary, tasksContext, dateStr);
   summary = ensureMcpSourceMentions(summary, odooContext, jiraContext);
+  await publishDailyStatusToConfluence(summary, dateStr);
 
   try {
     // Keep structured memory current on every daily run; operators can disable
