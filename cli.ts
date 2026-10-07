@@ -24,6 +24,7 @@ import {
   getOAuth2Client,
   cleanContentForEmail,
   generateAIContent,
+  loadLocalMemoryContext,
   formatAIError,
 } from './server.ts';
 import { searchVerbatimEvidence } from './verbatim-evidence-ledger.ts';
@@ -41,6 +42,7 @@ const ATLASSIAN_MCP_TOKEN_FILE = path.join(ROOT, '.atlassian-mcp-token.json');
 
 const CHAT_MARKER = '[PCG-Agent]';
 const CHAT_STATE_FILE = path.join(ROOT, '.chat-state.json');
+const CHAT_PENDING_PROPOSALS_FILE = path.join(ROOT, '.chat-pending-proposals.json');
 
 const DEFAULT_CLIENT_ID = '261415172337-16a674uqih6mk269b0hj8q61qguq6scp.apps.googleusercontent.com';
 const REDIRECT_PORT = Number(process.env.GOOGLE_REDIRECT_PORT || 4315);
@@ -351,6 +353,116 @@ function saveChatState(lastCreateTime: string) {
   fs.writeFileSync(CHAT_STATE_FILE, JSON.stringify({ lastCreateTime, updatedAt: new Date().toISOString() }, null, 2), 'utf-8');
 }
 
+function loadPendingChatProposals(): any[] {
+  try { return JSON.parse(fs.readFileSync(CHAT_PENDING_PROPOSALS_FILE, 'utf8')).proposals || []; } catch { return []; }
+}
+
+function savePendingChatProposals(proposals: any[]) {
+  fs.writeFileSync(CHAT_PENDING_PROPOSALS_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), proposals }, null, 2), 'utf8');
+}
+
+function extractDailyProposals(summary: string): any[] {
+  const match = summary.match(/<ACTION_PROPOSALS>([\s\S]*?)<\/ACTION_PROPOSALS>/i);
+  if (!match) return [];
+  try {
+    const proposals = JSON.parse(match[1].trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim());
+    return Array.isArray(proposals) ? proposals.filter((proposal: any) => proposal?.type === 'task') : [];
+  } catch { return []; }
+}
+
+function extractOpenTaskTitles(context: string): { title: string }[] {
+  return context.split(/\r?\n/).flatMap(line => {
+    const match = line.match(/^- \[OFFEN\] (.*?)(?= \|)/);
+    return match ? [{ title: match[1].trim() }] : [];
+  });
+}
+
+async function confirmPendingChatProposals(text: string, token: string): Promise<string | null> {
+  const match = text.match(/^(?:bestätige|bestatige|confirm)\s+(.+)$/i);
+  if (!match) return null;
+  const proposals = loadPendingChatProposals();
+  if (proposals.length === 0) return 'Keine ausstehenden Vorschläge vorhanden.';
+  const selection = match[1].trim().toLowerCase();
+  const indexes = selection === 'alle' || selection === 'all'
+    ? proposals.map((_, index) => index)
+    : selection.split(/[,\s]+/).map(value => Number(value) - 1).filter(index => Number.isInteger(index) && index >= 0 && index < proposals.length);
+  if (indexes.length === 0) return 'Keine gültige Vorschlagsnummer erkannt. Beispiel: `bestätige 1,3`.';
+  const taskResults: string[] = [];
+  for (const index of [...new Set(indexes)]) {
+    const proposal = proposals[index];
+    const title = proposal.details?.title || proposal.title;
+    const notes = proposal.details?.notes || '';
+    try {
+      const result = await createGoogleTaskDirect(title, notes, proposal.details?.dueDate || '', token);
+      taskResults.push(`OK: ${title} (${result.id})`);
+    } catch (error: any) {
+      taskResults.push(`FEHLER: ${title} - ${error?.message || error}`);
+    }
+  }
+  savePendingChatProposals(proposals.filter((_, index) => !indexes.includes(index)));
+  return `Bestätigte Tasks:\n${taskResults.join('\n')}`;
+}
+
+async function generateTaskAgentSuggestions(tasks: { title: string; id?: string }[], summary: string): Promise<string[]> {
+  if (tasks.length === 0) return [];
+  const taskText = tasks.map((task, index) => `${index + 1}. ${task.title}`).join('\n');
+  try {
+    const response = await generateAIContent({
+      contents: `Gehe jeden der folgenden offenen Google Tasks einzeln durch und formuliere genau eine konkrete Agenten-Unterstützung. Der Agent darf nichts automatisch ausführen; formuliere nur einen Vorschlag für Hardy. Verwende zuerst das lokale Memory, dann den Daily-Kontext. Nur wenn dort Fakten fehlen oder widersprüchlich sind, soll die spätere Bearbeitung Transkripte, E-Mails, Odoo, Jira oder Kalender als Primärquellen nachladen.\n\nLOKALES MEMORY:\n${loadLocalMemoryContext().slice(0, 30000)}\n\nOFFENE TASKS:\n${taskText}\n\nRELEVANTER DAILY-AUSZUG:\n${extractDailyTodoSection(summary).slice(0, 12000)}`,
+      config: {
+        temperature: 0.0,
+        systemInstruction: 'Antworte ausschließlich als JSON-Array mit Objekten der Form {"task":"exakter Tasktitel","suggestion":"KI könnte ..."}. Erzeuge genau einen Vorschlag pro Task. Bevorzuge konkrete PCG-Agentenaktionen wie Odoo-/Jira-Abgleich, Entwurf einer freundlichen Teamchat-Nachricht, Kalender-/E-Mail-Vorbereitung oder Quellenvergleich. Keine Behauptung, dass eine Aktion bereits ausgeführt wurde.',
+      },
+    });
+    const parsed = JSON.parse((response.text || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim());
+    if (Array.isArray(parsed)) return tasks.map(task => {
+      const match = parsed.find((item: any) => item?.task === task.title) || parsed.find((item: any) => task.title.includes(item?.task || ''));
+      return match?.suggestion ? `- **${task.title}**: ${match.suggestion}` : '';
+    }).filter(Boolean);
+  } catch (error: any) {
+    console.warn('Task-Agent-Vorschläge konnten nicht erzeugt werden:', error?.message || error);
+  }
+  return tasks.map(task => {
+    const title = task.title;
+    const suggestion = /odoo|projekt|buchung|reststund|mco|pm|zuordnung/i.test(title)
+      ? 'KI könnte Odoo nach Projekt-/Task-ID, Status, Reststunden und der korrekten Buchungszuordnung prüfen und dir eine konkrete Handlungsempfehlung geben.'
+      : /sow|angebot|scope|funding|presales|workshop/i.test(title)
+        ? 'KI könnte die relevanten Notes, Angebote und Quellen vergleichen, offene Scope-/Budgetpunkte markieren und einen nächsten Entwurf vorbereiten.'
+        : /email|mail|nachfass|status|kontakt|anfrage|abstimm/i.test(title)
+          ? 'KI könnte den aktuellen Quellenstand prüfen und eine passende, freundliche Nachricht mit den relevanten Fakten als Entwurf formulieren.'
+          : /personio|onboarding|probation|ziel|buddy|training|udemy/i.test(title)
+            ? 'KI könnte die aktuellen Personio-/Probation-Regeln abgleichen, Fristen prüfen und einen konkreten Ablauf oder Entwurf für die Führungskommunikation erstellen.'
+            : /jira|asana|import|board/i.test(title)
+              ? 'KI könnte die vorhandenen Jira-/Asana-Daten vergleichen, fehlende Zuordnungen erkennen und einen sicheren Migrations- oder Prüfplan erstellen.'
+              : 'KI könnte die aktuellen Quellen zu diesem Task zusammenführen, den nächsten sinnvollen Arbeitsschritt identifizieren und einen konkreten Entwurf vorbereiten.';
+    return `- **${title}**: ${suggestion}`;
+  });
+}
+
+async function handleAgentSuggestionResponse(text: string, token: string, conversationContext = ''): Promise<string | null> {
+  if (!/\b(ok|ja|bestätig|bestat|mach|umsetz\w*|erstelle|entwurf|draft)\b/i.test(text)) return null;
+  let suggestions: { taskTitle: string; suggestion: string }[] = [];
+  try { suggestions = JSON.parse(fs.readFileSync(CHAT_PENDING_PROPOSALS_FILE, 'utf8')).suggestions || []; } catch { return null; }
+  if (suggestions.length === 0) return null;
+  const numberMatch = text.match(/(?:^|\s)(\d+)(?:\)|\.|\s|$)/);
+  const selected = numberMatch && suggestions[Number(numberMatch[1]) - 1]
+    ? suggestions[Number(numberMatch[1]) - 1]
+    : suggestions.find(item => /entwurf|draft/i.test(text) && /entwurf|draft|nachricht|mail|email/i.test(item.suggestion)) || suggestions[0];
+  try {
+    const response = await generateAIContent({
+      contents: `Hardy möchte diesen Agenten-Vorschlag ausführen:\nTask: ${selected.taskTitle}\nAgenten-Vorschlag: ${selected.suggestion}\nHardys Antwort: ${text}\n\nBISHERIGER CHAT-KONTEXT:\n${conversationContext}\n\nLOKALES MEMORY (zuerst verwenden):\n${loadLocalMemoryContext().slice(0, 30000)}\n\nErstelle jetzt den angeforderten Entwurf. Wenn eine konkrete Tatsache im Memory fehlt oder veraltet wirkt, greife auf die zugehörigen Transkripte, E-Mails, Odoo-, Jira- oder Kalenderquellen zurück. Sende oder veröffentliche nichts.`,
+      config: {
+        temperature: 0.0,
+        systemInstruction: 'Erstelle ausschließlich den konkreten Entwurf, den Hardy angefordert hat. Keine Analyse, keine ACTION_PROPOSALS, keine automatische Ausführung. Wenn Empfänger oder Projektkontext fehlen, markiere die fehlenden Angaben kurz.',
+      },
+    });
+    fs.writeFileSync(CHAT_PENDING_PROPOSALS_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), suggestions: suggestions.filter(item => item !== selected) }, null, 2), 'utf8');
+    return `Entwurf für „${selected.taskTitle}“:\n\n${response.text || '(Kein Entwurf erzeugt.)'}`;
+  } catch (error: any) {
+    return `Der Agenten-Vorschlag konnte nicht ausgeführt werden: ${error?.message || error}`;
+  }
+}
+
 async function cmdChatSpaces() {
   const accessToken = await getAccessToken();
   const chat = google.chat({ version: 'v1', auth: getOAuth2Client(accessToken) });
@@ -374,26 +486,29 @@ async function cmdChatSend(text: string) {
   console.log(`Nachricht gesendet (${res.data.name})`);
 }
 
-async function processChatCommand(text: string, token: string, oauth2Client: any): Promise<string> {
+async function processChatCommand(text: string, token: string, oauth2Client: any, conversationContext = ''): Promise<string> {
   const systemInstruction = `Du bist der PCG Agent Memory Manager, der persönliche KI-Assistent von Hardy Engwer (Squad Lead DATA / AI Consultant bei PCG). Interpretiere die folgende Chat-Nachricht von Hardy und übersetze sie in GENAU EIN JSON-Aktionsobjekt. Antworte ausschließlich mit:
 
 <ACTION>
- { "action": "task" | "calendar" | "email" | "todos" | "status" | "daily" | "browser-compare", "title": "", "notes": "", "dueDate": "", "startTime": "", "to": "", "subject": "", "body": "", "urls": "" }
+  { "action": "task" | "calendar" | "email" | "todos" | "status" | "daily" | "browser-compare" | "reply", "title": "", "notes": "", "dueDate": "", "startTime": "", "to": "", "subject": "", "body": "", "urls": "", "response": "" }
 </ACTION>
 
 Regeln:
 - task: Aufgabe in Google Tasks anlegen. title = Aufgabe, dueDate als YYYY-MM-DD (falls genannt, sonst leer), notes = Details.
 - calendar: Kalendertermin anlegen. title = Titel, startTime = "YYYY-MM-DDTHH:MM:SS" (aus der Nachricht ableiten).
+- Erinnerungen, Nachfasspunkte und „Reminder“ immer als task behandeln, niemals als calendar. Wenn für einen Kalendertermin Datum oder Uhrzeit fehlen, wähle keine alte oder erfundene Zeit, sondern frage nach den fehlenden Angaben.
 - email: E-Mail senden. to, subject, body füllen. to leer lassen, wenn nicht genannt (dann wird es an Hardy selbst gesendet).
 - todos: Liste der offenen Google Tasks ausgeben (keine weiteren Felder nötig).
 - status: Status des letzten Daily-Updates ausgeben.
 - daily: Das komplette tägliche Update (Briefing + Tasks + E-Mail) jetzt auslösen.
 - browser-compare: Die angegebenen HTTP(S)-URLs nacheinander im über die Browser MCP Extension verbundenen Tab öffnen und vergleichen. urls muss mindestens zwei URLs enthalten; title oder notes enthält die Vergleichsanweisung.
-- Wenn die Absicht unklar ist, wähle action="todos".
+- reply: Normale Frage, Rückfrage oder Gesprächsbeitrag. Antworte direkt auf Deutsch im Feld response, ohne Task, Report oder andere Aktion auszulösen.
+- Wenn Hardy nicht ausdrücklich eine Aktion verlangt, wähle action="reply" statt "todos".
+- Verwende für Datumsangaben ausschließlich das heutige Datum oder die Zukunft. Das heutige Datum ist ${new Date().toISOString().slice(0, 10)}.
 Antworte NUR mit dem <ACTION>-Block, kein anderer Text.`;
 
   const response = await generateAIContent({
-    contents: `Chat-Nachricht von Hardy: ${text}`,
+    contents: `Chat-Nachricht von Hardy: ${text}\n\nBISHERIGER CHAT-KONTEXT:\n${conversationContext}\n\nLOKALES MEMORY (erste Referenz für die Antwort):\n${loadLocalMemoryContext().slice(0, 20000)}\n\nWenn die Antwort daraus nicht belastbar möglich ist, müssen bei einer konkreten Aufgabenbearbeitung die passenden aktuellen Primärquellen nachgeladen werden: Transkripte, E-Mails, Odoo, Jira oder Kalender.`,
     config: { temperature: 0.0, systemInstruction },
   });
 
@@ -419,7 +534,18 @@ Antworte NUR mit dem <ACTION>-Block, kein anderer Text.`;
         const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
         const start = new Date(action.startTime);
         if (isNaN(start.getTime())) return `Ungültige Zeit: ${action.startTime}`;
+        if (start.getTime() < Date.now()) return `Der Termin liegt in der Vergangenheit (${action.startTime}). Bitte nenne ein gültiges zukünftiges Datum und eine Uhrzeit.`;
         const end = new Date(start.getTime() + 60 * 60000);
+        const existing = await calendar.events.list({
+          calendarId: 'primary',
+          timeMin: new Date(start.getTime() - 60 * 60000).toISOString(),
+          timeMax: new Date(end.getTime() + 60 * 60000).toISOString(),
+          singleEvents: true,
+          maxResults: 50,
+        });
+        if ((existing.data.items || []).some((event: any) => event.summary && event.summary.toLowerCase() === String(action.title || '').toLowerCase())) {
+          return `Termin bereits vorhanden: ${action.title}`;
+        }
         const created = await calendar.events.insert({
           calendarId: 'primary',
           requestBody: {
@@ -456,7 +582,14 @@ Antworte NUR mit dem <ACTION>-Block, kein anderer Text.`;
       case 'daily': {
         const result = await performDailyUpdate(token, true, { autoCreateTasks: true });
         const tasks = (result.createdTasks || []).map((t) => `${t.error ? 'FEHLER' : 'OK'}: ${t.title}`).join('\n') || 'keine';
-        return `Daily-Update abgeschlossen (${result.dateStr}).\nErstellte Tasks:\n${tasks}\nE-Mail: ${result.emailSent ? 'gesendet' : 'fehlgeschlagen'}.`;
+        const suggestions = await generateTaskAgentSuggestions(result.createdTasks || [], result.summary);
+        const structuredSuggestions = suggestions.map(line => {
+          const match = line.match(/^- \*\*(.+?)\*\*:\s*(.*)$/s);
+          return match ? { taskTitle: match[1], suggestion: match[2] } : { taskTitle: 'Daily-Task', suggestion: line };
+        });
+        fs.writeFileSync(CHAT_PENDING_PROPOSALS_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), suggestions: structuredSuggestions }, null, 2), 'utf8');
+        const suggestionText = suggestions.length > 0 ? `\n\nAgenten-Vorschläge zur Bearbeitung:\n${suggestions.map((suggestion, index) => `${index + 1}. ${suggestion.replace(/^-\s*/, '')}`).join('\n')}\nAntworte z. B. mit „mach einen Entwurf zu 2“ oder „setze 1 um“.` : '\n\nKeine neuen Agenten-Vorschläge für diesen Lauf.';
+        return `Daily-Update abgeschlossen (${result.dateStr}).\nErstellte Tasks:\n${tasks}\nE-Mail: ${result.emailSent ? 'gesendet' : 'fehlgeschlagen'}.${suggestionText}`;
       }
       case 'browser-compare': {
         const instruction = action.title || action.notes || 'Vergleiche die sichtbaren Seiten und nenne die wichtigsten Unterschiede.';
@@ -464,10 +597,14 @@ Antworte NUR mit dem <ACTION>-Block, kein anderer Text.`;
         const result = await compareBrowserPages(instruction, action.urls);
         return `Browser-Vergleich (${result.pages.map((page) => page.url).join(', ')}):\n\n${result.result}`;
       }
+      case 'reply':
+        return action.response || action.notes || 'Ich habe deine Nachricht verstanden. Wie soll ich dich dabei unterstützen?';
       case 'todos':
       default: {
         const context = await fetchTasks(oauth2Client);
-        return context ? context.slice(0, 3000) : 'Keine Tasks gefunden.';
+        if (!context) return 'Keine Tasks gefunden.';
+        const taskSuggestions = await generateTaskAgentSuggestions(extractOpenTaskTitles(context).slice(0, 20), '');
+        return `${context.slice(0, 3000)}\n\nAgenten-Unterstützung je offenem Task:\n${taskSuggestions.join('\n')}`;
       }
     }
   } catch (err: any) {
@@ -513,7 +650,16 @@ async function cmdChatProcess() {
   const replies: string[] = [];
   for (const cmd of commands) {
     console.log(`- Befehl: ${cmd.text.slice(0, 80)}`);
-    replies.push(await processChatCommand(cmd.text, accessToken, oauth2Client));
+    const conversationContext = messages
+      .filter(message => (message.createTime || '') < cmd.time)
+      .slice(-10)
+      .map(message => `${message.text || ''}`.slice(0, 2500))
+      .join('\n---\n');
+    await chat.spaces.messages.create({
+      parent: spaceId,
+      requestBody: { text: `${CHAT_MARKER} Ich bearbeite deine Anfrage und melde mich mit dem Ergebnis.` },
+    });
+    replies.push((await handleAgentSuggestionResponse(cmd.text, accessToken, conversationContext)) || (await confirmPendingChatProposals(cmd.text, accessToken)) || await processChatCommand(cmd.text, accessToken, oauth2Client, conversationContext));
   }
 
   if (newMax) saveChatState(newMax);
@@ -522,6 +668,18 @@ async function cmdChatProcess() {
     requestBody: { text: `${CHAT_MARKER} ${replies.join('\n\n')}` },
   });
   console.log('Antwort in den Chat-Raum gepostet.');
+}
+
+async function cmdChatWatch() {
+  console.log('Chat-Watcher aktiv. Neue Nachrichten werden automatisch verarbeitet. Abbruch mit Strg+C.');
+  while (true) {
+    try {
+      await cmdChatProcess();
+    } catch (error: any) {
+      console.warn('Chat-Watcher Fehler:', error?.message || error);
+    }
+    await new Promise(resolve => setTimeout(resolve, 15000));
+  }
 }
 
 async function cmdAuth(force: boolean) {
@@ -679,13 +837,13 @@ async function cmdDaily() {
   console.log('\n--- Zusammenfassung ---');
   console.log(result.summary);
   console.log('\n--- Ergebnis ---');
-  if (result.createdTasks && result.createdTasks.length > 0) {
-    console.log('Erstellte Google Tasks:');
+   if (result.createdTasks && result.createdTasks.length > 0) {
+     console.log('Erstellte Google Tasks:');
     for (const t of result.createdTasks) {
       console.log(`  ${t.error ? 'FEHLER' : 'OK'}: ${t.title}${t.error ? ` (${t.error})` : ` (ID: ${t.id})`}`);
     }
-  } else {
-    console.log('Erstellte Google Tasks: keine');
+   } else {
+     console.log('Erstellte Google Tasks: keine');
   }
   console.log(`E-Mail gesendet: ${result.emailSent ? 'ja' : 'nein'}${result.emailErrorMsg ? ' - ' + result.emailErrorMsg : ''}`);
   console.log(`Datum: ${result.dateStr}\n`);
@@ -693,15 +851,19 @@ async function cmdDaily() {
   if (process.env.CHAT_SPACE_ID) {
     try {
       const chat = google.chat({ version: 'v1', auth: getOAuth2Client(accessToken) });
-      const todoSection = extractDailyTodoSection(result.summary);
-      const chunks = splitChatMessage(cleanContentForEmail(todoSection));
-      for (const [index, chunk] of chunks.entries()) {
-        await chat.spaces.messages.create({
-          parent: getChatSpaceId(),
-          requestBody: { text: `${CHAT_MARKER} Daily-Update ${result.dateStr} (${index + 1}/${chunks.length})\n\n${chunk}` },
-        });
-      }
-      console.log(`Briefing in ${chunks.length} Teilen nach Google Chat gepostet.`);
+       const currentTaskContext = await fetchTasks(getOAuth2Client(accessToken));
+       const currentOpenTasks = extractOpenTaskTitles(currentTaskContext).slice(0, 20);
+       const agentSuggestions = await generateTaskAgentSuggestions(currentOpenTasks, result.summary);
+       const structuredSuggestions = agentSuggestions.map(line => {
+         const match = line.match(/^- \*\*(.+?)\*\*:\s*(.*)$/s);
+         return match ? { taskTitle: match[1], suggestion: match[2] } : { taskTitle: 'Daily-Task', suggestion: line };
+       });
+       fs.writeFileSync(CHAT_PENDING_PROPOSALS_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), suggestions: structuredSuggestions }, null, 2), 'utf8');
+       const chatText = agentSuggestions.length > 0
+         ? `${CHAT_MARKER} Agenten-Vorschläge zur Bearbeitung neuer Tasks (${result.dateStr})\n\n${agentSuggestions.join('\n')}\n\nDer vollständige Daily steht per E-Mail und Drive zur Verfügung.`
+         : `${CHAT_MARKER} Keine neuen Task-Agenten-Vorschläge für den Daily ${result.dateStr}. Der vollständige Daily steht per E-Mail und Drive zur Verfügung.`;
+       await chat.spaces.messages.create({ parent: getChatSpaceId(), requestBody: { text: chatText } });
+       console.log('Nur Agenten-Vorschläge nach Google Chat gepostet.');
     } catch (chatErr: any) {
       console.warn('Chat-Post fehlgeschlagen:', chatErr?.message || chatErr);
     }
@@ -964,7 +1126,8 @@ PCG Agent CLI – Befehle:
 Chat-Rückkanal (Google Chat Bot):
   npm run agent -- chat-spaces         Chat-Räume auflisten (Raum-ID für .env)
   npm run agent -- chat-send "Text"    Nachricht in den konfigurierten Raum senden
-  npm run agent -- chat-process        Neue Chat-Befehle lesen, ausführen, antworten
+   npm run agent -- chat-process        Neue Chat-Befehle lesen, ausführen, antworten
+   npm run agent -- chat-watch          Chat dauerhaft überwachen und direkt antworten
 
 Konfiguration in .env:
   GEMINI_API_KEY        Pflicht – für die KI
@@ -1005,6 +1168,7 @@ async function main() {
       case 'chat-spaces': return await cmdChatSpaces();
       case 'chat-send': return await cmdChatSend(args.slice(1).join(' '));
       case 'chat-process': return await cmdChatProcess();
+      case 'chat-watch': return await cmdChatWatch();
       case 'help':
       case '--help':
       case '-h': return printHelp();

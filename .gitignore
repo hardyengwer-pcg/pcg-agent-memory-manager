@@ -15,6 +15,7 @@ coverage/
 .odoo-project-context-cache.json
 .atlassian-mcp-token.json
 .chat-state.json
+.chat-pending-proposals.json
 .ai_settings.json
 .last_cron_status.json
 agent-memory/

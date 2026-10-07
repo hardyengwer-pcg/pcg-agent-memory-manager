@@ -640,7 +640,7 @@ export function extractDavidOneOnOneAgenda(tasksContext?: string): string {
 }
 
 // Function to recursively list files in the knowledge base folder
-function loadLocalMemoryContext(): string {
+export function loadLocalMemoryContext(): string {
   try {
     const memDir = path.join(process.cwd(), 'agent-memory');
     if (!fs.existsSync(memDir)) return "(Kein lokales Nutzer-Memory vorhanden.)\n";
@@ -2438,7 +2438,7 @@ app.post('/api/transcribe', async (req, res) => {
   }
 });
 
-export async function performDailyUpdate(accessToken: string, forceRefresh: boolean = false, options: { autoCreateTasks?: boolean } = {}) {
+export async function performDailyUpdate(accessToken: string, forceRefresh: boolean = false, options: { autoCreateTasks?: boolean } = { autoCreateTasks: true }) {
   const oauth2Client = getOAuth2Client(accessToken);
 
   // Validate base token first
