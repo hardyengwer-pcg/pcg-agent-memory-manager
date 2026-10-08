@@ -32,7 +32,10 @@ export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence
           messagePage += 1;
         } while (messagePageToken && messagePage < 10);
         const recentCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-        for (const message of messages.filter(message => !message.createTime || Date.parse(message.createTime) >= recentCutoff)) {
+        for (const message of messages.filter(message => {
+          if (message.createTime && Date.parse(message.createTime) < recentCutoff) return false;
+          return !/^\[PCG-Agent\]/i.test(String(message.text || '').trim());
+        })) {
           const sender = message.sender?.displayName || message.sender?.name || 'User';
           const text = message.text || '(Kein Text)';
           const time = message.createTime ? ` [${new Date(message.createTime).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' })}]` : '';
