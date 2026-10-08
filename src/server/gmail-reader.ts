@@ -38,6 +38,7 @@ export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidenc
           const snippet = message.snippet || '';
           const internalDate = Number(message.internalDate) || (date ? new Date(date).getTime() : 0);
           if (labelIds.includes('TRASH') || labelIds.includes('SPAM')) return null;
+          if (/^(?:PCG Agent Daily Briefing|Daily_Update_)/i.test(subject.trim())) return null;
 
           const statusStr = labelIds.includes('SENT') ? 'GESENDET' : labelIds.includes('INBOX') ? 'Posteingang (Aktiv)' : 'ARCHIVIERT';
           let bodyText = '';

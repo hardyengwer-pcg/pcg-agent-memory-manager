@@ -35,3 +35,25 @@ test('marks sent emails and preserves follow-up context', async () => {
   assert.match(context, /AUSGANG: Für offene Antworten Follow-up prüfen/);
   assert.equal(evidence[0].metadata.status, 'GESENDET');
 });
+
+test('excludes generated Daily report emails from context and evidence', async () => {
+  const evidence: any[] = [];
+  const gmail = {
+    users: {
+      messages: {
+        list: async () => ({ data: { messages: [{ id: 'daily-mail' }] } }),
+        get: async () => ({ data: {
+          id: 'daily-mail',
+          labelIds: ['SENT', 'INBOX'],
+          internalDate: String(Date.now()),
+          snippet: 'Generated Daily report',
+          payload: { headers: [{ name: 'Subject', value: 'PCG Agent Daily Briefing - 2026-10-08' }], mimeType: 'text/plain', body: { data: Buffer.from('Generated Daily report').toString('base64') } },
+        } }),
+      },
+    },
+  };
+
+  const context = await fetchRecentEmails({}, input => evidence.push(...input), () => gmail as any);
+  assert.doesNotMatch(context, /Generated Daily report/);
+  assert.equal(evidence.length, 0);
+});

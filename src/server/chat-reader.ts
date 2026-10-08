@@ -18,6 +18,7 @@ export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence
     for (let batchStart = 0; batchStart < spaces.length; batchStart += 10) {
       const batchContext = await Promise.all(spaces.slice(batchStart, batchStart + 10).map(async space => {
       if (!space.name) return '';
+      if (space.name === process.env.CHAT_SPACE_ID || /^pcg agent$/i.test(String(space.displayName || '').trim())) return '';
       const spaceLabel = space.displayName ? `Raum: "${space.displayName}"` : `Raum: ${space.name}`;
       const chatUrl = `https://chat.google.com/room/${space.name.replace('spaces/', '')}`;
       let spaceContext = `- ${spaceLabel} | Direktlink: ${chatUrl}\n`;
