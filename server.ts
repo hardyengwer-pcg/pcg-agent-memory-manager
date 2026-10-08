@@ -604,7 +604,7 @@ app.post('/api/token-sync', (req, res) => {
 export const driveFolderId = '1YK8hW4LWtZdmLW-hLcs9fFX_jFz3teOB';
 export const driveMeetRecordingsFolderId = '1iX0fNTKFoF-LPeu2LFGIhFzgEKfj8Lws';
 export const driveTranscriptFolderId = '1Hk053rZZhE720Ri5uVdGPwYOYQ36tpHT';
-const CONFLUENCE_MEMORY_PARENT_ID = '3328508017';
+const CONFLUENCE_MEMORY_PARENT_ID = '1859256702';
 const CONFLUENCE_MEMORY_CLOUD_ID = 'e1fc84dd-5e15-41d8-b1a3-4b9038636cae';
 const CONFLUENCE_MEMORY_SPACE_ID = '~71202086e31aeb26de405a845989f5cda2a392';
 
@@ -1618,6 +1618,8 @@ export function ensureActionSectionTasks(summary: string, tasksContext: string, 
 function ensureMcpSourceMentions(summary: string, odooContext: string, jiraContext: string): string {
   const mentions: string[] = [];
   const odooProjectLines = odooContext.split('\n').filter(line => line.startsWith('- Odoo-Projekt-ID ')).slice(0, 15);
+  const hardyMainProjectLines = odooContext.split('\n').filter(line => line.startsWith('- Hardy-Hauptprojekt | '));
+  const hardyMainTaskLines = odooContext.split('\n').filter(line => line.startsWith('- Hardy-Hauptprojekt-Task | '));
   const jiraIssueLines = jiraContext.split('\n').filter(line => line.startsWith('- Jira ')).slice(0, 20);
   if (/Odoo-Projekt- und Zeiterfassungskontext/.test(odooContext) && !/\[Quelle: Odoo MCP/.test(summary)) {
     mentions.push('- **Odoo-Abgleich:** Aktuelle Odoo-Projekt-, Task- und Zeiterfassungsdaten wurden read-only verarbeitet. [Quelle: Odoo MCP](https://odoo-mcp.gateway.pcg.io/mcp/)');
@@ -1625,47 +1627,82 @@ function ensureMcpSourceMentions(summary: string, odooContext: string, jiraConte
   if (/Jira-Projektstatus/.test(jiraContext) && !/\[Quelle: Atlassian MCP/.test(summary)) {
     mentions.push('- **Jira-Abgleich:** Aktuelle Jira-Issues und Statusdaten wurden read-only verarbeitet. [Quelle: Atlassian MCP](https://mcp.atlassian.com/v1/mcp/authv2)');
   }
-  if (mentions.length === 0) return summary;
+  const needsHardyMainOverview = hardyMainProjectLines.length > 0 && !summary.includes('Hardys Hauptprojekte in Odoo');
+  if (mentions.length === 0 && !needsHardyMainOverview) return summary;
   const statusHeader = '\n## 7. 📋 Kompakte Projektstatusübersicht';
   if (!summary.includes(statusHeader)) return `${summary}\n${mentions.join('\n')}`;
   const odooOverview = odooProjectLines.length > 0
     ? `\n### Odoo-Projektabgleich\n${odooProjectLines.join('\n')}\n[Quelle: Odoo MCP](https://odoo-mcp.gateway.pcg.io/mcp/)\n`
     : '';
+  const hardyMainOverview = hardyMainProjectLines.length > 0
+    ? `\n### Hardys Hauptprojekte in Odoo\n${hardyMainProjectLines.join('\n')}\n\n#### Zugehörige Odoo-Tasks\n${hardyMainTaskLines.join('\n') || '(Keine aktiven Tasks gefunden.)'}\n[Quelle: Odoo MCP](https://odoo-mcp.gateway.pcg.io/mcp/)\n`
+    : '';
   const jiraOverview = jiraIssueLines.length > 0
     ? `\n### Jira-Projektabgleich\n${jiraIssueLines.join('\n')}\n[Quelle: Atlassian MCP](https://mcp.atlassian.com/v1/mcp/authv2)\n`
     : '';
-  return summary.replace(statusHeader, `\n${mentions.join('\n')}\n${statusHeader}${odooOverview}${jiraOverview}`);
+  return summary.replace(statusHeader, `\n${mentions.join('\n')}\n${statusHeader}${hardyMainOverview}${odooOverview}${jiraOverview}`);
 }
 
-async function publishDailyStatusToConfluence(summary: string, dateStr: string): Promise<void> {
+async function publishDailyStatusToConfluence(summary: string, dateStr: string, odooContext: string): Promise<void> {
   try {
     const config = await getConfiguredRemoteMcpServerAsync('atlassian');
-    const findPage = async (title: string) => {
-      const search = await callRemoteMcpTool(config, 'searchConfluenceUsingCql', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, cql: `title = "${title}"`, limit: 10 });
+    const findPage = async (title: string, parentId: string) => {
+      const search = await callRemoteMcpTool(config, 'searchConfluenceUsingCql', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, cql: `ancestor = "${parentId}" AND title ~ "${title}"`, limit: 20 });
       const text = search.content?.find((item: any) => item.type === 'text')?.text || '';
       const data = JSON.parse(text || '{}');
-      return Array.isArray(data.results) ? (data.results.find((result: any) => (result.content || result).id)?.content || data.results.find((result: any) => (result.content || result).id)) : null;
+      if (!Array.isArray(data.results)) return null;
+      const result = data.results.find((item: any) => String((item.content || item).title || '').toLowerCase().startsWith(title.toLowerCase())) || data.results.find((item: any) => (item.content || item).id);
+      return result?.content || result || null;
     };
     const ensurePage = async (title: string, parentId: string, body: string) => {
-      const existing = await findPage(title);
-      if (existing?.id) return String(existing.id);
+      const existing = await findPage(title, parentId);
+      if (existing?.id) {
+        await callRemoteMcpTool(config, 'updateConfluencePage', {
+          cloudId: CONFLUENCE_MEMORY_CLOUD_ID,
+          pageId: String(existing.id),
+          title,
+          contentFormat: 'markdown',
+          body,
+        });
+        return String(existing.id);
+      }
       const created = await callRemoteMcpTool(config, 'createConfluencePage', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, spaceId: CONFLUENCE_MEMORY_SPACE_ID, parentId, title, contentFormat: 'markdown', body });
       const text = created.content?.find((item: any) => item.type === 'text')?.text || '';
       return String(JSON.parse(text || '{}').id || '');
     };
-    const dailyRootId = await ensurePage('Daily Project Status', CONFLUENCE_MEMORY_PARENT_ID, '# Daily Project Status\n\nAutomatisch gepflegte Tagesseiten für Projektstatus, Reststunden, Prognosen und Quellen.');
+    const memoryRootId = await ensurePage('PCG Agent Memory', CONFLUENCE_MEMORY_PARENT_ID, '# PCG Agent Memory\n\nAutomatisch gepflegte Projekt-, Squad- und Prozessübersichten des PCG Agent Memory Managers.');
+    if (!memoryRootId) throw new Error('Confluence-Root für PCG Agent Memory konnte nicht angelegt werden.');
+    const dailyRootId = await ensurePage('Daily Project Status', memoryRootId, '# Daily Project Status\n\nAutomatisch gepflegte Tagesseiten für Projektstatus, Reststunden, Prognosen und Quellen.');
     if (!dailyRootId) throw new Error('Confluence-Parent für Daily Project Status konnte nicht angelegt werden.');
     const datePageId = await ensurePage(dateStr, dailyRootId, `# Daily Project Status ${dateStr}\n\n${cleanContentForEmail(summary)}`);
     if (!datePageId) throw new Error(`Confluence-Tagesseite ${dateStr} konnte nicht angelegt werden.`);
     const blocks = summary.match(/^- \*\*[\s\S]*?(?=^- \*\*|^## |$)/gm) || [];
+    const odooProjects = odooContext.split('\n').filter(line => line.startsWith('- Odoo-Projekt-ID '));
+    const bookedOdooTasks = odooContext.split('\n').filter(line => line.startsWith('- Odoo-Task-ID ') && line.includes('Exaktes Odoo-Projekt:'));
     const projectDir = path.join(process.cwd(), 'agent-memory', 'projects');
     if (fs.existsSync(projectDir)) {
       for (const fileName of fs.readdirSync(projectDir).filter(name => name.endsWith('.md'))) {
         const memory = fs.readFileSync(path.join(projectDir, fileName), 'utf8');
         const title = memory.match(/^title:\s*(.+)$/m)?.[1]?.trim() || fileName.replace(/\.md$/, '');
-        const terms = title.toLowerCase().split(/[^a-z0-9äöüß]+/i).filter(term => term.length >= 4);
-        const dailyBlocks = blocks.filter(block => terms.some(term => block.toLowerCase().includes(term))).join('\n\n');
-        const body = `${memory}\n\n## Daily-Auszug ${dateStr}\n\n${dailyBlocks || 'Für dieses Projekt wurde im aktuellen Daily kein eigener Statusblock erzeugt.'}`;
+        const projectIds = [...memory.matchAll(/Odoo(?:\s|-)?Projekt(?:\s|-)?ID\s*[:`]?\s*(\d+)/gi)].map(match => match[1]);
+        const projectTitleKey = title.split('(')[0].trim().toLowerCase();
+        const matchingOdooProjects = odooProjects.filter(line => projectIds.some(id => line.includes(`Odoo-Projekt-ID ${id} `)) || (projectTitleKey.length >= 5 && line.toLowerCase().includes(projectTitleKey)));
+        const exactOdooNames = matchingOdooProjects.flatMap(line => [...line.matchAll(/\| Projekt:\s*([^|]+)/gi)].map(match => match[1].trim()));
+        const matchingDailyBlocks = blocks.filter(block => {
+          const lowerBlock = block.toLowerCase();
+          return matchingOdooProjects.some(project => {
+            const id = project.match(/^- Odoo-Projekt-ID\s+(\d+)/)?.[1];
+            return Boolean(id && lowerBlock.includes(`odoo projekt-id ${id}`)) || exactOdooNames.some(name => lowerBlock.includes(name.toLowerCase()));
+          }) || (projectTitleKey.length >= 5 && lowerBlock.includes(projectTitleKey));
+        });
+        const matchingTasks = bookedOdooTasks.filter(line => matchingOdooProjects.some(project => {
+          const id = project.match(/^- Odoo-Projekt-ID\s+(\d+)/)?.[1];
+          return Boolean(id && line.includes(`(ID ${id})`));
+        }));
+        const odooSection = matchingOdooProjects.length > 0
+          ? `## Odoo-Abgleich\n${matchingOdooProjects.join('\n')}\n\n### Tatsächlich bebuchte Tasks\n${matchingTasks.join('\n') || 'Keine bebuchten Tasks mit task_id im aktuellen Monat.'}\n[Quelle: Odoo MCP](https://odoo-mcp.gateway.pcg.io/mcp/)`
+          : '## Odoo-Abgleich\nKein eindeutiger Odoo-Projektabgleich für diesen Memory-Eintrag gefunden; keine Projektdaten ableiten.';
+        const body = `${memory}\n\n${odooSection}\n\n## Daily-Auszug ${dateStr}\n\n${matchingDailyBlocks.join('\n\n') || 'Für dieses Projekt wurde im aktuellen Daily kein eigener Statusblock erzeugt.'}`;
         await ensurePage(title, datePageId, body);
       }
     }
@@ -2705,7 +2742,7 @@ MANDATORISCHE FORMATIERUNGS- & INHALTS-REGELN:
   );
   summary = ensureActionSectionTasks(summary, tasksContext, dateStr);
   summary = ensureMcpSourceMentions(summary, odooContext, jiraContext);
-  await publishDailyStatusToConfluence(summary, dateStr);
+  await publishDailyStatusToConfluence(summary, dateStr, odooContext);
 
   try {
     // Keep structured memory current on every daily run; operators can disable

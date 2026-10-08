@@ -159,7 +159,7 @@ export async function fetchOdooProjectStatusContext() {
   try {
     const config = await getConfiguredRemoteMcpServerAsync('odoo-mcp');
     const callOdoo = (name: string, args: Record<string, unknown>) => callOdooToolWithRetry(config, name, args);
-    const projectQueryFields = ['id', 'name', 'active', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'];
+    const projectQueryFields = ['id', 'name', 'active', 'user_id', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'];
     const taskQueryFields = ['id', 'name', 'active', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'];
     const namedProjectAliases = [
       { alias: 'HHA', terms: ['HHA', 'Hamburger Hochbahn'] },
@@ -256,7 +256,7 @@ export async function fetchOdooProjectStatusContext() {
         { field: 'date', operator: '<=', value: todayISO },
         { field: 'user_id', operator: 'in', value: squadUserIds },
       ],
-      fields: ['id', 'date', 'project_id', 'user_id', 'unit_amount'],
+       fields: ['id', 'date', 'project_id', 'task_id', 'user_id', 'unit_amount'],
       offset,
       limit: 100,
       } });
@@ -266,6 +266,7 @@ export async function fetchOdooProjectStatusContext() {
     }
     const squadBookings = squadBookingResults.filter(line => Array.isArray(line.project_id) && Number(line.unit_amount) > 0 && !/pcg global|pcg int\.? projects|^intern(?:al)?$|jira sync|^support$/i.test(line.project_id[1] || ''));
     const bookedProjectIds = [...new Set(squadBookings.map(line => line.project_id[0]).filter(Boolean))];
+    const bookedTaskIds = [...new Set(squadBookings.map(line => Array.isArray(line.task_id) ? line.task_id[0] : null).filter(Boolean))];
     const bookedProjectsResult = bookedProjectIds.length > 0 ? await callOdoo('search_records', { request: {
       model: 'project.project',
       domain: [{ field: 'id', operator: 'in', value: bookedProjectIds }],
@@ -273,6 +274,13 @@ export async function fetchOdooProjectStatusContext() {
       limit: 100,
     } }) : null;
     const bookedProjects = new Map(extractToolRecords(bookedProjectsResult).map(project => [project.id, project]));
+    const bookedTasksResult = bookedTaskIds.length > 0 ? await callOdoo('search_records', { request: {
+      model: 'project.task',
+      domain: [{ field: 'id', operator: 'in', value: bookedTaskIds }],
+      fields: ['id', 'name', 'project_id', 'stage_id', 'active'],
+      limit: 100,
+    } }) : null;
+    const bookedTasks = new Map(extractToolRecords(bookedTasksResult).map(task => [task.id, task]));
     const hardyPmProjectsResult = await callOdoo('search_records', { request: {
       model: 'project.project',
       domain: [{ field: 'additional_manager_ids', operator: 'in', value: [13566] }],
@@ -300,6 +308,20 @@ export async function fetchOdooProjectStatusContext() {
       const hardyPmMarker = hardyPmProjectIds.has(project.id) ? ' | Hardy-PM-Projekt' : '';
       return `- Squad-Mitglied: ${user} | Odoo-Projekt: ${project.name} | Gebucht im laufenden Monat: ${hours.toFixed(2)}h | Reststunden gesamt: ${remaining === null ? 'n/a' : `${remaining.toFixed(2)}h`} | Prognose bei aktuellem Tempo: ${forecast}${hardyPmMarker}`;
     }).join('\n');
+    const bookedTaskGroups = new Map<string, { task: any; project: any; users: Set<string>; hours: number }>();
+    for (const line of squadBookings) {
+      if (!Array.isArray(line.task_id)) continue;
+      const task = bookedTasks.get(line.task_id[0]) || { id: line.task_id[0], name: line.task_id[1] };
+      const project = bookedProjects.get(line.project_id[0]) || { id: line.project_id[0], name: line.project_id[1] };
+      const key = `${project.id}|${task.id}`;
+      const current = bookedTaskGroups.get(key) || { task, project, users: new Set<string>(), hours: 0 };
+      current.users.add(relationName(line.user_id));
+      current.hours += Number(line.unit_amount) || 0;
+      bookedTaskGroups.set(key, current);
+    }
+    const bookedTaskLines = [...bookedTaskGroups.values()].map(({ task, project, users, hours }) =>
+      `- Odoo-Task-ID ${task.id} | Exaktes Odoo-Projekt: ${project.name} (ID ${project.id}) | Task: ${task.name} | Squad-Buchungen laufender Monat: ${hours.toFixed(2)}h | Gebucht von: ${[...users].join(', ')}`,
+    ).join('\n');
     const hardyPmGroups = new Map<number, { project: any; hours: number }>();
     for (const line of squadBookings) {
       const projectId = line.project_id[0];
@@ -344,7 +366,7 @@ export async function fetchOdooProjectStatusContext() {
         limit: 100,
       } }))
     )));
-    const projects = extractToolRecords(projectsResult).filter(project => project.active !== false).slice(0, 40).map(project => ({
+    const projects = extractToolRecords(projectsResult).filter(project => project.active !== false).map(project => ({
       ...project,
       customer: project.partner_id || project.company_id || project.account_id || null,
       time_left_hours: typeof project.allocated_hours === 'number' && typeof project.effective_hours === 'number'
@@ -354,6 +376,10 @@ export async function fetchOdooProjectStatusContext() {
     const tasks = extractToolRecords(tasksResult).filter(task => task.active !== false).slice(0, 80);
     const projectLines = projects.map(project => `- Odoo-Projekt-ID ${project.id} | Projekt: ${project.name} | Kunde/Account: ${relationName(project.customer)} | Beauftragt: ${project.allocated_hours ?? 'n/a'}h | Verbraucht: ${project.effective_hours ?? 'n/a'}h | Time left: ${project.time_left_hours ?? 'n/a'}h | Overrun: ${project.is_project_overtime ? 'JA' : 'nein'} | Status: ${project.last_update_status || 'n/a'}`).join('\n');
     const taskLines = tasks.map(task => `- Odoo-Task-ID ${task.id} | Task: ${task.name} | Projekt: ${relationName(task.project_id)} | Status: ${relationName(task.stage_id)} | Fällig: ${task.date_deadline || 'n/a'} | Geplant: ${task.planned_hours ?? 'n/a'}h | Verbraucht: ${task.effective_hours ?? 'n/a'}h`).join('\n');
+    const hardyMainProjects = projects.filter(project => Array.isArray(project.user_id) && Number(project.user_id[0]) === 13566);
+    const hardyMainProjectIds = new Set(hardyMainProjects.map(project => project.id));
+    const hardyMainProjectLines = hardyMainProjects.map(project => `- Hardy-Hauptprojekt | Odoo-Projekt-ID ${project.id} | Exakter Odoo-Name: ${project.name} | Hauptprojektmanager: ${relationName(project.user_id)} | Kunde/Account: ${relationName(project.customer)} | Beauftragt: ${project.allocated_hours ?? 'n/a'}h | Verbraucht: ${project.effective_hours ?? 'n/a'}h | Reststunden: ${project.time_left_hours ?? 'n/a'}h | Status: ${project.last_update_status || 'n/a'}`).join('\n');
+    const hardyMainTaskLines = tasks.filter(task => Array.isArray(task.project_id) && hardyMainProjectIds.has(task.project_id[0])).map(task => `- Hardy-Hauptprojekt-Task | Odoo-Task-ID ${task.id} | Exaktes Odoo-Projekt: ${relationName(task.project_id)} | Task: ${task.name} | Status: ${relationName(task.stage_id)} | Fällig: ${task.date_deadline || 'n/a'} | Geplant: ${task.planned_hours ?? 'n/a'}h | Verbraucht: ${task.effective_hours ?? 'n/a'}h`).join('\n');
     const dataAiTaskLines = extractToolRecords(taggedTasksResult)
       .filter(task => task.active !== false)
       .map(task => `- Odoo-Task-ID ${task.id} | Task: ${task.name} | Eindeutiges Odoo-Projekt: ${relationName(task.project_id)} | Verantwortlich: ${relationName(task.activity_user_id)} | Status: ${relationName(task.stage_id)}`)
@@ -367,7 +393,7 @@ export async function fetchOdooProjectStatusContext() {
       return `- ${alias}: ${allRecords.length > 0 ? allRecords.map(project => `Odoo-Projekt-ID ${project.id} | exakter Odoo-Name: ${project.name}`).join(' || ') : '(kein eindeutiger Odoo-Treffer)'}`;
     }).join('\n');
     const taggedProjectLines = taggedProjects.map(project => `- Odoo-Projekt-ID ${project.id} | exakter Odoo-Name: ${project.name}`).join('\n');
-    const context = `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\n[Quelle: Odoo MCP – project.project / project.task / account.analytic.line](https://odoo-mcp.gateway.pcg.io/mcp/)\nVERBINDLICHE NAMENSZUORDNUNG FÜR DEN BERICHT (immer den exakten Odoo-Namen verwenden):\n${aliasLines}\nHARDY-PM-PROJEKTE IM LAUFENDEN MONAT (Odoo additional_manager_ids, Hardy-ID 13566):\n${hardyPmLines || '(Keine Hardy-PM-Projekte mit aktueller Squad-Buchung gefunden.)'}\nKAPAZITÄTSAUSBLICK SQUAD (aktuelle Monatsbuchungen):\n${capacityLines || '(Keine aktuellen Squad-Buchungen gefunden.)'}\nPROJEKTE DER SQUAD IM LAUFENDEN MONAT (Zuordnung über tatsächliche Odoo-Zeitbuchungen; Hardy ist ausdrücklich enthalten):\n${squadBookingLines || '(Keine aktuellen Odoo-Zeitbuchungen der konfigurierten Squad-Mitglieder gefunden.)'}\nDie Prognose ist eine Näherung aus dem bisherigen Monatsverbrauch, keine verbindliche Lieferzusage.\nDATA/AI-PROJEKTPOOL UND SQUAD-TASK-ZUORDNUNG (project_id ist die führende Zuordnung):\n${taggedProjectLines || '(Keine Data/AI-getaggten Odoo-Projekte geliefert.)'}\n${dataAiTaskLines || '(Keine aktiven Tasks zu Data/AI-Projekten geliefert.)'}\nPROJEKTE / KUNDEN / RESTSTUNDEN:\n${projectLines || '(Keine aktiven Odoo-Projekte geliefert.)'}\nAKTIVE TASKS / ZEITERFASSUNG:\n${taskLines || '(Keine aktiven Odoo-Tasks geliefert.)'}\n`;
+     const context = `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\n[Quelle: Odoo MCP – project.project / project.task / account.analytic.line](https://odoo-mcp.gateway.pcg.io/mcp/)\nVERBINDLICHE NAMENSZUORDNUNG FÜR DEN BERICHT (immer den exakten Odoo-Namen verwenden):\n${aliasLines}\nHARDYS HAUPTPROJEKTE (project.project.user_id = Hardy-ID 13566; bei jedem Daily vollständig aus Odoo abgleichen):\n${hardyMainProjectLines || '(Keine Hauptprojekte mit Hardy als Hauptprojektmanager gefunden.)'}\nTASKS DER HARDY-HAUPTPROJEKTE:\n${hardyMainTaskLines || '(Keine aktiven Tasks zu Hardys Hauptprojekten geliefert.)'}\nHARDY-PM-PROJEKTE MIT ZUSATZMANAGER-ZUORDNUNG IM LAUFENDEN MONAT (Odoo additional_manager_ids, Hardy-ID 13566):\n${hardyPmLines || '(Keine Hardy-PM-Projekte mit aktueller Squad-Buchung gefunden.)'}\nKAPAZITÄTSAUSBLICK SQUAD (aktuelle Monatsbuchungen):\n${capacityLines || '(Keine aktuellen Squad-Buchungen gefunden.)'}\nPROJEKTE DER SQUAD IM LAUFENDEN MONAT (Zuordnung über tatsächliche Odoo-Zeitbuchungen; Hardy ist ausdrücklich enthalten):\n${squadBookingLines || '(Keine aktuellen Odoo-Zeitbuchungen der konfigurierten Squad-Mitglieder gefunden.)'}\nTATSÄCHLICH BEBUCHTE TASKS DER SQUAD IM LAUFENDEN MONAT (account.analytic.line.task_id):\n${bookedTaskLines || '(Keine Task-Buchungen mit task_id geliefert.)'}\nDie Prognose ist eine Näherung aus dem bisherigen Monatsverbrauch, keine verbindliche Lieferzusage.\nDATA/AI-PROJEKTPOOL UND SQUAD-TASK-ZUORDNUNG (project_id ist die führende Zuordnung):\n${taggedProjectLines || '(Keine Data/AI-getaggten Odoo-Projekte geliefert.)'}\n${dataAiTaskLines || '(Keine aktiven Tasks zu Data/AI-Projekten geliefert.)'}\nPROJEKTE / KUNDEN / RESTSTUNDEN:\n${projectLines || '(Keine aktiven Odoo-Projekte geliefert.)'}\nAKTIVE TASKS / ZEITERFASSUNG:\n${taskLines || '(Keine aktiven Odoo-Tasks geliefert.)'}\n`;
     fs.writeFileSync('.odoo-project-context-cache.json', JSON.stringify({ updatedAt: new Date().toISOString(), context }), 'utf8');
     return context;
   } catch (error: any) {

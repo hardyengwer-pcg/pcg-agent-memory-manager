@@ -507,8 +507,18 @@ Regeln:
 - Verwende für Datumsangaben ausschließlich das heutige Datum oder die Zukunft. Das heutige Datum ist ${new Date().toISOString().slice(0, 10)}.
 Antworte NUR mit dem <ACTION>-Block, kein anderer Text.`;
 
+  const needsCurrentPeopleContext = /squad|team|anne|david|urlaub|urlauber|abwesen|neuzugang|neue personen|dazu kommen|dazukommen|transfer/i.test(text);
+  let currentPeopleContext = '';
+  if (needsCurrentPeopleContext) {
+    const [liveChats, upcomingEvents] = await Promise.all([
+      fetchRecentChats(oauth2Client, () => {}),
+      fetchUpcomingEvents(oauth2Client, () => {}),
+    ]);
+    currentPeopleContext = `\n\nAKTUELLE LIVE-QUELLEN FÜR TEAM-/URLAUBSFRAGEN (bevorzuge diese gegenüber älteren Memory-Angaben):\n${liveChats.slice(-60000)}\n\nKALENDER/ABWESENHEITEN:\n${upcomingEvents.slice(-20000)}`;
+  }
+
   const response = await generateAIContent({
-    contents: `Chat-Nachricht von Hardy: ${text}\n\nBISHERIGER CHAT-KONTEXT:\n${conversationContext}\n\nLOKALES MEMORY (erste Referenz für die Antwort):\n${loadLocalMemoryContext().slice(0, 20000)}\n\nWenn die Antwort daraus nicht belastbar möglich ist, müssen bei einer konkreten Aufgabenbearbeitung die passenden aktuellen Primärquellen nachgeladen werden: Transkripte, E-Mails, Odoo, Jira oder Kalender.`,
+    contents: `Chat-Nachricht von Hardy: ${text}\n\nBISHERIGER CHAT-KONTEXT:\n${conversationContext}\n\nLOKALES MEMORY (erste Referenz für die Antwort):\n${loadLocalMemoryContext().slice(0, 20000)}${currentPeopleContext}\n\nWenn die Antwort daraus nicht belastbar möglich ist, müssen bei einer konkreten Aufgabenbearbeitung die passenden aktuellen Primärquellen nachgeladen werden: Transkripte, E-Mails, Odoo, Jira oder Kalender. Bei Team-, Neuzugangs- oder Urlaubsfragen nenne nur Personen und Zeiträume, die in den aktuellen Live-Quellen oder im Memory belegt sind. Wenn eine Quelle fehlt, sage konkret, welche Quelle nicht zugänglich war.`,
     config: { temperature: 0.0, systemInstruction },
   });
 
