@@ -52,6 +52,8 @@ app.use('/api', createApiAuthMiddleware({
 
 const TOKEN_FILE = path.join(process.cwd(), '.latest_token.json');
 const CRON_STATUS_FILE = path.join(process.cwd(), '.last_cron_status.json');
+const CHAT_PENDING_PROPOSALS_FILE = path.join(process.cwd(), '.chat-pending-proposals.json');
+const CHAT_MARKER = '[PCG-Agent]';
 
 let latestAccessToken: string | null = null;
 
@@ -3040,6 +3042,36 @@ app.post('/api/cron/trigger', async (req, res) => {
   }
 });
 
+async function postDailyAgentSuggestions(accessToken: string, summary: string, dateStr: string): Promise<void> {
+  if (!process.env.CHAT_SPACE_ID) return;
+  try {
+    const oauth2Client = getOAuth2Client(accessToken);
+    const tasksContext = await fetchTasks(oauth2Client);
+    const response = await generateAIContent({
+      contents: `Erstelle konkrete Agenten-Vorschläge für die offenen Google Tasks aus diesem Daily. Nutze nur Tasks, die im Kontext stehen. Gib höchstens 5 kurze Zeilen im Format "- **Tasktitel**: konkrete Unterstützung durch den Agenten" zurück. Wenn keine sinnvollen Vorschläge möglich sind, gib exakt "KEINE" zurück.\n\nOFFENE TASKS:\n${tasksContext.slice(0, 16000)}\n\nDAILY-AUSZUG:\n${cleanContentForEmail(summary).slice(0, 24000)}`,
+      config: {
+        temperature: 0.0,
+        systemInstruction: 'Du formulierst ausschließlich konkrete, taskbezogene Agenten-Unterstützung auf Deutsch. Keine allgemeinen Zusammenfassungen, keine erfundenen Tasks und keine automatische Ausführung.',
+      },
+    });
+    const suggestions = (response.text || '').trim();
+    const lines = suggestions === 'KEINE' ? [] : suggestions.split(/\r?\n/).map(line => line.trim()).filter(line => /^- \*\*.+\*\*:\s*.+/.test(line)).slice(0, 5);
+    const structuredSuggestions = lines.map(line => {
+      const match = line.match(/^- \*\*(.+?)\*\*:\s*(.*)$/s);
+      return match ? { taskTitle: match[1], suggestion: match[2] } : { taskTitle: 'Daily-Task', suggestion: line };
+    });
+    fs.writeFileSync(CHAT_PENDING_PROPOSALS_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), suggestions: structuredSuggestions }, null, 2), 'utf8');
+    const chat = google.chat({ version: 'v1', auth: oauth2Client });
+    const chatText = lines.length > 0
+      ? `${CHAT_MARKER} Agenten-Vorschläge zur Bearbeitung neuer Tasks (${dateStr})\n\n${lines.join('\n')}\n\nDer vollständige Daily steht per E-Mail und Drive zur Verfügung.`
+      : `${CHAT_MARKER} Keine neuen Task-Agenten-Vorschläge für den Daily ${dateStr}. Der vollständige Daily steht per E-Mail und Drive zur Verfügung.`;
+    await chat.spaces.messages.create({ parent: process.env.CHAT_SPACE_ID, requestBody: { text: chatText } });
+    console.log(`[Chat] Daily-Agenten-Vorschläge gepostet (${lines.length}).`);
+  } catch (error: any) {
+    console.warn('[Chat] Daily-Agenten-Vorschläge konnten nicht gepostet werden:', error?.message || error);
+  }
+}
+
 // An Werktagen (Montag bis Freitag) um 8:00 Uhr laufen lassen (Europe/Berlin Zeit) mit automatischem Refresh-Token
 if (isMain) {
 cron.schedule('0 8 * * 1-5', async () => {
@@ -3056,7 +3088,9 @@ cron.schedule('0 8 * * 1-5', async () => {
   }
   console.log("Running daily automated update at 08:00 (Mon-Fri)...");
   try {
-    await performDailyUpdate(token);
+    const result = await performDailyUpdate(token);
+    console.log(`[Email] Daily-E-Mail ${result.emailSent ? 'gesendet' : 'nicht gesendet'}${result.emailErrorMsg ? `: ${result.emailErrorMsg}` : ''}`);
+    await postDailyAgentSuggestions(token, result.summary, result.dateStr);
     console.log("Daily update completed successfully.");
   } catch (err: any) {
     if (isAuthError(err)) {
