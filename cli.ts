@@ -490,14 +490,15 @@ async function processChatCommand(text: string, token: string, oauth2Client: any
   const systemInstruction = `Du bist der PCG Agent Memory Manager, der persönliche KI-Assistent von Hardy Engwer (Squad Lead DATA / AI Consultant bei PCG). Interpretiere die folgende Chat-Nachricht von Hardy und übersetze sie in GENAU EIN JSON-Aktionsobjekt. Antworte ausschließlich mit:
 
 <ACTION>
-  { "action": "task" | "calendar" | "email" | "todos" | "status" | "daily" | "browser-compare" | "reply", "title": "", "notes": "", "dueDate": "", "startTime": "", "to": "", "subject": "", "body": "", "urls": "", "response": "" }
+  { "action": "task" | "calendar" | "email" | "chat" | "todos" | "status" | "daily" | "browser-compare" | "reply", "title": "", "notes": "", "dueDate": "", "startTime": "", "to": "", "subject": "", "body": "", "urls": "", "response": "" }
 </ACTION>
 
 Regeln:
 - task: Aufgabe in Google Tasks anlegen. title = Aufgabe, dueDate als YYYY-MM-DD (falls genannt, sonst leer), notes = Details.
 - calendar: Kalendertermin anlegen. title = Titel, startTime = "YYYY-MM-DDTHH:MM:SS" (aus der Nachricht ableiten).
 - Erinnerungen, Nachfasspunkte und „Reminder“ immer als task behandeln, niemals als calendar. Wenn für einen Kalendertermin Datum oder Uhrzeit fehlen, wähle keine alte oder erfundene Zeit, sondern frage nach den fehlenden Angaben.
-- email: E-Mail senden. to, subject, body füllen. to leer lassen, wenn nicht genannt (dann wird es an Hardy selbst gesendet).
+- email: E-Mail als Gmail-Entwurf anlegen, niemals direkt senden. to, subject, body füllen. to leer lassen, wenn nicht genannt (dann wird Hardy als Empfänger eingesetzt).
+- chat: Eine direkte Google-Chat-Nachricht senden. to enthält den Namen des Empfängers oder Chat-Raums (z. B. "Sudipt Panda"), body enthält den vollständigen Nachrichtentext. Bei "Panda schreiben" action="chat" wählen, nicht reply.
 - todos: Liste der offenen Google Tasks ausgeben (keine weiteren Felder nötig).
 - status: Status des letzten Daily-Updates ausgeben.
 - daily: Das komplette tägliche Update (Briefing + Tasks + E-Mail) jetzt auslösen.
@@ -580,8 +581,29 @@ Antworte NUR mit dem <ACTION>-Block, kein anderer Text.`;
           action.body || '',
         ].join('\r\n');
         const encoded = Buffer.from(body).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        await gmail.users.messages.send({ userId: 'me', requestBody: { raw: encoded } });
-        return `E-Mail gesendet an ${to}: ${action.subject}`;
+        const draft = await gmail.users.drafts.create({ userId: 'me', requestBody: { message: { raw: encoded } } });
+        return `E-Mail-Entwurf für ${to} erstellt: ${action.subject || '(ohne Betreff)'}${draft.data.id ? ` (Draft-ID: ${draft.data.id})` : ''}`;
+      }
+      case 'chat': {
+        const chat = google.chat({ version: 'v1', auth: oauth2Client });
+        const target = String(action.to || action.title || '').trim();
+        const spaces: any[] = [];
+        let pageToken: string | undefined;
+        let page = 0;
+        do {
+          const listed = await chat.spaces.list({ pageSize: 100, pageToken });
+          spaces.push(...(listed.data.spaces || []));
+          pageToken = listed.data.nextPageToken || undefined;
+          page += 1;
+        } while (pageToken && page < 10);
+        const normalizedTarget = target.toLowerCase();
+        const selectedSpace = target.startsWith('spaces/')
+          ? spaces.find(space => space.name === target)
+          : spaces.find(space => String(space.displayName || '').toLowerCase().includes(normalizedTarget));
+        const parent = selectedSpace?.name || (!target ? process.env.CHAT_SPACE_ID : undefined);
+        if (!parent) return `Kein Google-Chat-Raum für „${target}“ gefunden. Bitte nenne den genauen Chat-Raumnamen.`;
+        await chat.spaces.messages.create({ parent, requestBody: { text: action.body || action.notes || '' } });
+        return `Chat-Nachricht an ${selectedSpace?.displayName || target || parent} gesendet.`;
       }
       case 'status': {
         const cron = getCronStatus();
