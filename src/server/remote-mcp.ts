@@ -139,7 +139,7 @@ function extractToolJson(result: any): any {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-async function callOdooToolWithRetry(config: RemoteMcpServerConfig, name: string, args: Record<string, unknown>, timeoutMs = 15000) {
+async function callOdooToolWithRetry(config: RemoteMcpServerConfig, name: string, args: Record<string, unknown>, timeoutMs = 30000) {
   let lastError: any;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
@@ -149,7 +149,7 @@ async function callOdooToolWithRetry(config: RemoteMcpServerConfig, name: string
       ]);
     } catch (error: any) {
       lastError = error;
-      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500));
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1500));
     }
   }
   throw lastError || new Error(`Odoo MCP ${name} fehlgeschlagen.`);
@@ -426,10 +426,7 @@ export async function fetchAtlassianJiraStatusContext() {
       callRemoteMcpTool(config, name, args),
       new Promise<any>((_, reject) => setTimeout(() => reject(new Error(`Atlassian MCP ${name} Timeout nach ${timeoutMs}ms`)), timeoutMs)),
     ]);
-    const resourcesResult = await callAtlassian('getAccessibleAtlassianResources', {});
-    const resources = extractToolJson(resourcesResult);
-    const jiraResource = Array.isArray(resources) ? resources.find(resource => resource.scopes?.includes('read:jira-work')) : null;
-    if (!jiraResource?.id) return '(Jira-MCP liefert keine zugängliche Jira-Ressource.)\n';
+    const jiraResource = { id: process.env.ATLASSIAN_CLOUD_ID || 'e1fc84dd-5e15-41d8-b1a3-4b9038636cae', url: 'https://public-cloud-group.atlassian.net' };
     const issuesResult = await callAtlassian('searchJiraIssuesUsingJql', {
       cloudId: jiraResource.id,
       jql: 'updated >= -14d ORDER BY updated DESC',
@@ -450,7 +447,7 @@ export async function fetchAtlassianJiraStatusContext() {
     const issueLines = Array.isArray(issues) ? issues.map((issue: any) => `- Jira ${issue.key || 'n/a'} | Projekt: ${issue.project?.name || issue.project?.key || 'n/a'} | ${issue.summary || 'ohne Summary'} | Status: ${issue.status?.name || 'n/a'} | Priorität: ${issue.priority?.name || 'n/a'} | Assignee: ${issue.assignee?.displayName || issue.assignee?.emailAddress || 'unassigned'} | Updated: ${issue.updated || 'n/a'} | Labels: ${(issue.labels || []).join(', ') || 'keine'}`).join('\n') : JSON.stringify(issues);
     let leadershipContext = '';
     try {
-      const leadershipSearchResult = await callRemoteMcpTool(config, 'searchConfluenceUsingCql', {
+       const leadershipSearchResult = await callAtlassian('searchConfluenceUsingCql', {
         cloudId: jiraResource.id,
         cql: 'type in (page, blogpost) and (title ~ "Leadership" or title ~ "Probation" or text ~ "capacity" or text ~ "utilization" or text ~ "squad" or text ~ "allocation" or text ~ "billability" or text ~ "probation")',
         limit: 12,
@@ -463,7 +460,7 @@ export async function fetchAtlassianJiraStatusContext() {
         { id: '3221487767', title: 'Freelancer Engagement: New JIRA Process', type: 'blogpost' },
       ];
       const pages = [...requiredPages, ...searchedPages].filter((page, index, all) => all.findIndex(other => other.id === page.id) === index).slice(0, 10);
-      const pageResults = await Promise.all(pages.map((page: any) => callRemoteMcpTool(config, 'getConfluencePage', { cloudId: jiraResource.id, pageId: page.id })));
+       const pageResults = await Promise.all(pages.map((page: any) => callAtlassian('getConfluencePage', { cloudId: jiraResource.id, pageId: page.id })));
       const pageLines = pageResults.map((result: any, index: number) => {
         const page = extractToolJson(result) || {};
         const body = typeof page.body === 'string' ? page.body : JSON.stringify(page.body || '');

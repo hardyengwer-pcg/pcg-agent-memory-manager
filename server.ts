@@ -57,6 +57,15 @@ const CRON_STATUS_FILE = path.join(process.cwd(), '.last_cron_status.json');
 const CHAT_PENDING_PROPOSALS_FILE = path.join(process.cwd(), '.chat-pending-proposals.json');
 const DAILY_SOURCE_SNAPSHOT_FILE = path.join(process.cwd(), '.daily-source-snapshot.json');
 const DAILY_RUN_LOCK_FILE = path.join(process.cwd(), '.daily-run.lock');
+const DAILY_SOURCE_TIMEOUTS = {
+  drive: Number(process.env.DAILY_DRIVE_TIMEOUT_MS || 300000),
+  gmail: Number(process.env.DAILY_GMAIL_TIMEOUT_MS || 240000),
+  calendar: Number(process.env.DAILY_CALENDAR_TIMEOUT_MS || 120000),
+  chat: Number(process.env.DAILY_CHAT_TIMEOUT_MS || 240000),
+  tasks: Number(process.env.DAILY_TASKS_TIMEOUT_MS || 120000),
+  odoo: Number(process.env.DAILY_ODOO_TIMEOUT_MS || 300000),
+  jira: Number(process.env.DAILY_JIRA_TIMEOUT_MS || 240000),
+};
 const CHAT_MARKER = '[PCG-Agent]';
 
 let latestAccessToken: string | null = null;
@@ -2632,13 +2641,13 @@ async function performDailyUpdateInternal(accessToken: string, forceRefresh: boo
     odooContext,
     jiraContext
   ] = await Promise.all([
-    withSourceTimeout('Google Drive', fetchDriveContext(accessToken), '(Drive-Kontext wegen Timeout nicht verfügbar)\n', 180000),
-    withSourceTimeout('Gmail', fetchRecentEmails(oauth2Client, recordVerbatimEvidence), '(E-Mail-Kontext wegen Timeout nicht verfügbar)\n', 120000),
-    withSourceTimeout('Kalender', fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence), '(Kalender-Kontext wegen Timeout nicht verfügbar)\n', 90000),
-    withSourceTimeout('Google Chat', fetchRecentChats(oauth2Client, recordVerbatimEvidence), '(Chat-Kontext wegen Timeout nicht verfügbar)\n', 180000),
-    withSourceTimeout('Google Tasks', fetchTasks(oauth2Client, recordVerbatimEvidence), '(Task-Kontext wegen Timeout nicht verfügbar)\n', 90000),
-    withSourceTimeout('Odoo MCP', fetchOdooProjectStatusContext(), '(Odoo-Kontext wegen Timeout nicht verfügbar)\n', 90000),
-    withSourceTimeout('Jira MCP', fetchAtlassianJiraStatusContext(), '(Jira-Kontext wegen Timeout nicht verfügbar)\n', 120000),
+    withSourceTimeout('Google Drive', fetchDriveContext(accessToken), '(Drive-Kontext wegen Timeout nicht verfügbar)\n', DAILY_SOURCE_TIMEOUTS.drive),
+    withSourceTimeout('Gmail', fetchRecentEmails(oauth2Client, recordVerbatimEvidence), '(E-Mail-Kontext wegen Timeout nicht verfügbar)\n', DAILY_SOURCE_TIMEOUTS.gmail),
+    withSourceTimeout('Kalender', fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence), '(Kalender-Kontext wegen Timeout nicht verfügbar)\n', DAILY_SOURCE_TIMEOUTS.calendar),
+    withSourceTimeout('Google Chat', fetchRecentChats(oauth2Client, recordVerbatimEvidence), '(Chat-Kontext wegen Timeout nicht verfügbar)\n', DAILY_SOURCE_TIMEOUTS.chat),
+    withSourceTimeout('Google Tasks', fetchTasks(oauth2Client, recordVerbatimEvidence), '(Task-Kontext wegen Timeout nicht verfügbar)\n', DAILY_SOURCE_TIMEOUTS.tasks),
+    withSourceTimeout('Odoo MCP', fetchOdooProjectStatusContext(), '(Odoo-Kontext wegen Timeout nicht verfügbar)\n', DAILY_SOURCE_TIMEOUTS.odoo),
+    withSourceTimeout('Jira MCP', fetchAtlassianJiraStatusContext(), '(Jira-Kontext wegen Timeout nicht verfügbar)\n', DAILY_SOURCE_TIMEOUTS.jira),
   ]);
   const enrichedDriveContext = enrichTimestampTranscriptLinks(driveContext, eventsContext);
   const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);

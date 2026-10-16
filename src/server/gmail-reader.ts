@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 
 type RecordEvidence = (inputs: any[]) => void;
 
-async function getGmailMessageWithTimeout(gmail: any, id: string, timeoutMs = 8000): Promise<any | null> {
+async function getGmailMessageWithTimeout(gmail: any, id: string, timeoutMs = 15000): Promise<any | null> {
   try {
     return await Promise.race([
       gmail.users.messages.get({ userId: 'me', id, format: 'full' }).then((result: any) => result.data),
@@ -27,10 +27,10 @@ export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidenc
       } while (pageToken);
       return result;
     };
-    const messages = await listMessages('newer_than:7d -in:trash -in:spam', 40);
+    const messages = await listMessages('newer_than:7d -in:trash -in:spam', 80);
     let targetedMessages: any[] = [];
     try {
-      targetedMessages = await listMessages('newer_than:7d -in:trash -in:spam (transcript OR transkript OR "meeting notes" OR protokoll OR summary OR zusammenfassung OR "action items" OR todo OR to-do OR aufgabe OR projekt OR zugewiesen OR "next steps" OR handover OR scoping OR proposal OR sow OR "statement of work" OR "use case" OR "use cases" OR review OR retrospective OR alignment OR sync OR briefing OR absprache OR "Koenig" OR "Bauer" OR "Lorenz" OR "domcura" OR "voestalpine" OR "VOEST" OR "PK" OR "Einarbeitung" OR "Einarbeitungsplan" OR "Onboarding" OR "Mitarbeiter" OR "September" OR "Joiner" OR "Welcome" OR "Schulung")', 60);
+      targetedMessages = await listMessages('newer_than:7d -in:trash -in:spam (transcript OR transkript OR "meeting notes" OR protokoll OR summary OR zusammenfassung OR "action items" OR todo OR to-do OR aufgabe OR projekt OR zugewiesen OR "next steps" OR handover OR scoping OR proposal OR sow OR "statement of work" OR "use case" OR "use cases" OR review OR retrospective OR alignment OR sync OR briefing OR absprache OR "Koenig" OR "Bauer" OR "Lorenz" OR "domcura" OR "voestalpine" OR "VOEST" OR "PK" OR "Einarbeitung" OR "Einarbeitungsplan" OR "Onboarding" OR "Mitarbeiter" OR "September" OR "Joiner" OR "Welcome" OR "Schulung")', 120);
     } catch (error: any) {
       console.warn('Targeted Gmail query notice:', error?.message || error);
     }
