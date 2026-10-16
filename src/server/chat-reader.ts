@@ -35,7 +35,7 @@ export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence
       spaces.push(...(page.data.spaces || []));
       spacePageToken = page.data.nextPageToken || undefined;
       spacePage += 1;
-    } while (spacePageToken && spacePage < 10);
+      } while (spacePageToken && spacePage < 5);
     let context = 'Aktuelle Chat-Räume & Nachrichten:\n';
     for (let batchStart = 0; batchStart < spaces.length; batchStart += 10) {
       const batchContext = await Promise.all(spaces.slice(batchStart, batchStart + 10).map(async space => {
@@ -53,7 +53,7 @@ export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence
           messages.push(...(page.data.messages || []));
           messagePageToken = page.data.nextPageToken || undefined;
           messagePage += 1;
-        } while (messagePageToken && messagePage < 10);
+         } while (messagePageToken && messagePage < 2);
         const recentCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
         for (const message of messages.filter(message => {
           if (message.createTime && Date.parse(message.createTime) < recentCutoff) return false;

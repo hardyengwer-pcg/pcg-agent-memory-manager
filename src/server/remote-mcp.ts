@@ -247,22 +247,22 @@ export async function fetchOdooProjectStatusContext() {
     const normalizedSquadNames = new Set(squadNames.map(name => name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()));
     const squadUsers = extractToolRecords(allUsersResult).filter(user => normalizedSquadNames.has(String(user.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()));
     const squadUserIds = squadUsers.map(user => user.id).filter(Boolean);
-    const squadBookingResults: any[] = [];
-    for (let offset = 0; offset < 500; offset += 100) {
-      const page = await callOdoo('search_records', { request: {
-      model: 'account.analytic.line',
+    const fetchBookingPage = (offset: number) => callOdoo('search_records', { request: {
+        model: 'account.analytic.line',
       domain: [
         { field: 'date', operator: '>=', value: monthStartISO },
         { field: 'date', operator: '<=', value: todayISO },
         { field: 'user_id', operator: 'in', value: squadUserIds },
       ],
        fields: ['id', 'date', 'project_id', 'task_id', 'user_id', 'unit_amount'],
-      offset,
-      limit: 100,
-      } });
-      const records = extractToolRecords(page);
-      squadBookingResults.push(...records);
-      if (records.length < 100) break;
+       offset,
+       limit: 100,
+       } });
+    const firstBookingPage = extractToolRecords(await fetchBookingPage(0));
+    const squadBookingResults: any[] = [...firstBookingPage];
+    if (firstBookingPage.length === 100) {
+      const remainingPages = await Promise.all([100, 200, 300, 400].map(fetchBookingPage));
+      squadBookingResults.push(...remainingPages.flatMap(extractToolRecords));
     }
     const squadBookings = squadBookingResults.filter(line => Array.isArray(line.project_id) && Number(line.unit_amount) > 0 && !/pcg global|pcg int\.? projects|^intern(?:al)?$|jira sync|^support$/i.test(line.project_id[1] || ''));
     const bookedProjectIds = [...new Set(squadBookings.map(line => line.project_id[0]).filter(Boolean))];

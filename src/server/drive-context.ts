@@ -108,13 +108,13 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     });
 
     let context = '';
-    const meetingFiles = eligibleFiles.filter(file => isMeetingFile(file)).slice(0, 40);
-    const supportingFiles = eligibleFiles.filter(file => !isMeetingFile(file)).slice(0, 20);
+    const meetingFiles = eligibleFiles.filter(file => isMeetingFile(file)).slice(0, 20);
+    const supportingFiles = eligibleFiles.filter(file => !isMeetingFile(file)).slice(0, 8);
     const filesToRead = [...meetingFiles, ...supportingFiles];
     for (let batchStart = 0; batchStart < filesToRead.length; batchStart += 20) {
       const renderedBatch = await Promise.all(filesToRead.slice(batchStart, batchStart + 20).map(async file => {
       const isMeetingDocument = isMeetingFile(file);
-      const content = await dependencies.getFileContent(drive, file.id, file.mimeType, isMeetingDocument ? 60000 : 12000);
+       const content = await dependencies.getFileContent(drive, file.id, file.mimeType, isMeetingDocument ? 30000 : 8000);
       if (typeof content !== 'string') return '';
       const trimmedContent = isMeetingDocument
         ? content
