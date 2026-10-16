@@ -20,6 +20,7 @@ coverage/
 .ai_settings.json
 .last_cron_status.json
 .daily-source-snapshot.json
+.daily-run.lock
 agent-memory/
 .evidence-ledger/
 .antigravity/

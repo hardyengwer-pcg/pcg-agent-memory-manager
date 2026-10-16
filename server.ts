@@ -56,6 +56,7 @@ const TOKEN_FILE = path.join(process.cwd(), '.latest_token.json');
 const CRON_STATUS_FILE = path.join(process.cwd(), '.last_cron_status.json');
 const CHAT_PENDING_PROPOSALS_FILE = path.join(process.cwd(), '.chat-pending-proposals.json');
 const DAILY_SOURCE_SNAPSHOT_FILE = path.join(process.cwd(), '.daily-source-snapshot.json');
+const DAILY_RUN_LOCK_FILE = path.join(process.cwd(), '.daily-run.lock');
 const CHAT_MARKER = '[PCG-Agent]';
 
 let latestAccessToken: string | null = null;
@@ -75,6 +76,35 @@ function hasDailySourceChanged(digest: string): boolean {
 
 function saveDailySourceDigest(digest: string): void {
   fs.writeFileSync(DAILY_SOURCE_SNAPSHOT_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), digest }, null, 2), 'utf8');
+}
+
+async function withSourceTimeout<T>(label: string, promise: Promise<T>, fallback: T, timeoutMs: number): Promise<T> {
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} Timeout nach ${timeoutMs}ms`)), timeoutMs)),
+    ]);
+  } catch (error: any) {
+    console.warn(`[Daily Source] ${label} übersprungen:`, error?.message || error);
+    return fallback;
+  }
+}
+
+function acquireDailyRunLock(): () => void {
+  try {
+    if (fs.existsSync(DAILY_RUN_LOCK_FILE)) {
+      const lock = JSON.parse(fs.readFileSync(DAILY_RUN_LOCK_FILE, 'utf8')) as { startedAt?: string };
+      const age = lock.startedAt ? Date.now() - Date.parse(lock.startedAt) : Number.POSITIVE_INFINITY;
+      if (age < 2 * 60 * 60 * 1000) throw new Error('Ein Daily-Lauf ist bereits aktiv. Der zweite Lauf wird übersprungen.');
+      fs.unlinkSync(DAILY_RUN_LOCK_FILE);
+    }
+    const fd = fs.openSync(DAILY_RUN_LOCK_FILE, 'wx');
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), 'utf8');
+    fs.closeSync(fd);
+    return () => { try { fs.unlinkSync(DAILY_RUN_LOCK_FILE); } catch {} };
+  } catch (error: any) {
+    throw new Error(error?.message || 'Daily-Lock konnte nicht gesetzt werden.');
+  }
 }
 
 export class GoogleAuthError extends Error {
@@ -2542,6 +2572,15 @@ app.post('/api/transcribe', async (req, res) => {
 });
 
 export async function performDailyUpdate(accessToken: string, forceRefresh: boolean = false, options: { autoCreateTasks?: boolean } = { autoCreateTasks: true }) {
+  const releaseLock = acquireDailyRunLock();
+  try {
+    return await performDailyUpdateInternal(accessToken, forceRefresh, options);
+  } finally {
+    releaseLock();
+  }
+}
+
+async function performDailyUpdateInternal(accessToken: string, forceRefresh: boolean = false, options: { autoCreateTasks?: boolean } = { autoCreateTasks: true }) {
   const oauth2Client = getOAuth2Client(accessToken);
 
   // Validate base token first
@@ -2578,13 +2617,13 @@ export async function performDailyUpdate(accessToken: string, forceRefresh: bool
     odooContext,
     jiraContext
   ] = await Promise.all([
-    fetchDriveContext(accessToken),
-    fetchRecentEmails(oauth2Client, recordVerbatimEvidence),
-    fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence),
-    fetchRecentChats(oauth2Client, recordVerbatimEvidence),
-    fetchTasks(oauth2Client, recordVerbatimEvidence),
-    fetchOdooProjectStatusContext(),
-    fetchAtlassianJiraStatusContext()
+    withSourceTimeout('Google Drive', fetchDriveContext(accessToken), '(Drive-Kontext wegen Timeout nicht verfügbar)\n', 180000),
+    withSourceTimeout('Gmail', fetchRecentEmails(oauth2Client, recordVerbatimEvidence), '(E-Mail-Kontext wegen Timeout nicht verfügbar)\n', 120000),
+    withSourceTimeout('Kalender', fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence), '(Kalender-Kontext wegen Timeout nicht verfügbar)\n', 90000),
+    withSourceTimeout('Google Chat', fetchRecentChats(oauth2Client, recordVerbatimEvidence), '(Chat-Kontext wegen Timeout nicht verfügbar)\n', 180000),
+    withSourceTimeout('Google Tasks', fetchTasks(oauth2Client, recordVerbatimEvidence), '(Task-Kontext wegen Timeout nicht verfügbar)\n', 90000),
+    withSourceTimeout('Odoo MCP', fetchOdooProjectStatusContext(), '(Odoo-Kontext wegen Timeout nicht verfügbar)\n', 180000),
+    withSourceTimeout('Jira MCP', fetchAtlassianJiraStatusContext(), '(Jira-Kontext wegen Timeout nicht verfügbar)\n', 120000),
   ]);
   const enrichedDriveContext = enrichTimestampTranscriptLinks(driveContext, eventsContext);
   const davidAgendaContext = extractDavidOneOnOneAgenda(tasksContext);
