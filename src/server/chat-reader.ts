@@ -54,7 +54,10 @@ export async function fetchRecentChats(auth: any, recordEvidence: RecordEvidence
         let messagePageToken: string | undefined;
         let messagePage = 0;
         do {
-          const page = await chat.spaces.messages.list({ parent: space.name, pageSize: 100, pageToken: messagePageToken, orderBy: 'createTime desc' });
+           const page = await Promise.race([
+             chat.spaces.messages.list({ parent: space.name, pageSize: 100, pageToken: messagePageToken, orderBy: 'createTime desc' }),
+             new Promise<any>(resolve => setTimeout(() => resolve({ data: { messages: [] } }), 8000)),
+           ]);
           messages.push(...(page.data.messages || []));
           messagePageToken = page.data.nextPageToken || undefined;
           messagePage += 1;

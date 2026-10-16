@@ -422,16 +422,20 @@ export async function fetchOdooProjectStatusContext() {
 export async function fetchAtlassianJiraStatusContext() {
   try {
     const config = await getConfiguredRemoteMcpServerAsync('atlassian');
-    const resourcesResult = await callRemoteMcpTool(config, 'getAccessibleAtlassianResources');
+    const callAtlassian = async (name: string, args: Record<string, unknown>, timeoutMs = 20000) => Promise.race([
+      callRemoteMcpTool(config, name, args),
+      new Promise<any>((_, reject) => setTimeout(() => reject(new Error(`Atlassian MCP ${name} Timeout nach ${timeoutMs}ms`)), timeoutMs)),
+    ]);
+    const resourcesResult = await callAtlassian('getAccessibleAtlassianResources', {});
     const resources = extractToolJson(resourcesResult);
     const jiraResource = Array.isArray(resources) ? resources.find(resource => resource.scopes?.includes('read:jira-work')) : null;
     if (!jiraResource?.id) return '(Jira-MCP liefert keine zugängliche Jira-Ressource.)\n';
-    const issuesResult = await callRemoteMcpTool(config, 'searchJiraIssuesUsingJql', {
+    const issuesResult = await callAtlassian('searchJiraIssuesUsingJql', {
       cloudId: jiraResource.id,
       jql: 'updated >= -14d ORDER BY updated DESC',
       maxResults: 50,
       fields: ['summary', 'status', 'project', 'priority', 'assignee', 'updated', 'labels'],
-    });
+    }, 30000);
     const jiraData = extractToolJson(issuesResult) || {};
      const issues = Array.isArray(jiraData.issues) ? jiraData.issues.slice(0, 20).map((issue: any) => ({
       key: issue.key,

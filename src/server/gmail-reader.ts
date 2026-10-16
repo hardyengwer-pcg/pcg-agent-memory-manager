@@ -2,6 +2,17 @@ import { google } from 'googleapis';
 
 type RecordEvidence = (inputs: any[]) => void;
 
+async function getGmailMessageWithTimeout(gmail: any, id: string, timeoutMs = 8000): Promise<any | null> {
+  try {
+    return await Promise.race([
+      gmail.users.messages.get({ userId: 'me', id, format: 'full' }).then((result: any) => result.data),
+      new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidence, createGmailClient = (value: any) => google.gmail({ version: 'v1', auth: value })) {
   try {
     const gmail = createGmailClient(auth);
@@ -29,7 +40,8 @@ export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidenc
     for (let i = 0; i < ids.length; i += 10) {
       const chunkResults = await Promise.all(ids.slice(i, i + 10).map(async (msgId) => {
         try {
-          const message = (await gmail.users.messages.get({ userId: 'me', id: msgId, format: 'full' })).data;
+          const message = await getGmailMessageWithTimeout(gmail, msgId);
+          if (!message) return null;
           const headers = message.payload?.headers;
           const labelIds = message.labelIds || [];
           const subject = headers?.find(h => h.name === 'Subject')?.value || '(Kein Betreff)';

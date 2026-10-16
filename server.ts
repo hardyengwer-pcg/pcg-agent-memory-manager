@@ -1698,8 +1698,23 @@ function ensureMcpSourceMentions(summary: string, odooContext: string, jiraConte
 async function publishDailyStatusToConfluence(summary: string, dateStr: string, odooContext: string): Promise<void> {
   try {
     const config = await getConfiguredRemoteMcpServerAsync('atlassian');
+    const callConfluence = async (name: string, args: Record<string, unknown>) => {
+      let lastError: any;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          return await Promise.race([
+            callRemoteMcpTool(config, name, args),
+            new Promise((_, reject) => setTimeout(() => reject(new Error(`Confluence ${name} Timeout`)), 20000)),
+          ]);
+        } catch (error: any) {
+          lastError = error;
+          if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+        }
+      }
+      throw lastError || new Error(`Confluence ${name} fehlgeschlagen.`);
+    };
     const findPage = async (title: string, parentId: string) => {
-      const search = await callRemoteMcpTool(config, 'searchConfluenceUsingCql', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, cql: `ancestor = "${parentId}" AND title ~ "${title}"`, limit: 20 });
+      const search = await callConfluence('searchConfluenceUsingCql', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, cql: `ancestor = "${parentId}" AND title ~ "${title}"`, limit: 20 });
       const text = search.content?.find((item: any) => item.type === 'text')?.text || '';
       const data = JSON.parse(text || '{}');
       if (!Array.isArray(data.results)) return null;
@@ -1709,7 +1724,7 @@ async function publishDailyStatusToConfluence(summary: string, dateStr: string, 
     const ensurePage = async (title: string, parentId: string, body: string) => {
       const existing = await findPage(title, parentId);
       if (existing?.id) {
-        await callRemoteMcpTool(config, 'updateConfluencePage', {
+        await callConfluence('updateConfluencePage', {
           cloudId: CONFLUENCE_MEMORY_CLOUD_ID,
           pageId: String(existing.id),
           title,
@@ -1718,7 +1733,7 @@ async function publishDailyStatusToConfluence(summary: string, dateStr: string, 
         });
         return String(existing.id);
       }
-      const created = await callRemoteMcpTool(config, 'createConfluencePage', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, spaceId: CONFLUENCE_MEMORY_SPACE_ID, parentId, title, contentFormat: 'markdown', body });
+      const created = await callConfluence('createConfluencePage', { cloudId: CONFLUENCE_MEMORY_CLOUD_ID, spaceId: CONFLUENCE_MEMORY_SPACE_ID, parentId, title, contentFormat: 'markdown', body });
       const text = created.content?.find((item: any) => item.type === 'text')?.text || '';
       return String(JSON.parse(text || '{}').id || '');
     };
