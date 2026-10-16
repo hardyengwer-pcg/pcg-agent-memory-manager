@@ -21,6 +21,7 @@ coverage/
 .last_cron_status.json
 .daily-source-snapshot.json
 .daily-run.lock
+.drive-content-cache.json
 agent-memory/
 .evidence-ledger/
 .antigravity/

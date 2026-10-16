@@ -2622,7 +2622,7 @@ async function performDailyUpdateInternal(accessToken: string, forceRefresh: boo
     withSourceTimeout('Kalender', fetchUpcomingEvents(oauth2Client, recordVerbatimEvidence), '(Kalender-Kontext wegen Timeout nicht verfügbar)\n', 90000),
     withSourceTimeout('Google Chat', fetchRecentChats(oauth2Client, recordVerbatimEvidence), '(Chat-Kontext wegen Timeout nicht verfügbar)\n', 180000),
     withSourceTimeout('Google Tasks', fetchTasks(oauth2Client, recordVerbatimEvidence), '(Task-Kontext wegen Timeout nicht verfügbar)\n', 90000),
-    withSourceTimeout('Odoo MCP', fetchOdooProjectStatusContext(), '(Odoo-Kontext wegen Timeout nicht verfügbar)\n', 180000),
+    withSourceTimeout('Odoo MCP', fetchOdooProjectStatusContext(), '(Odoo-Kontext wegen Timeout nicht verfügbar)\n', 90000),
     withSourceTimeout('Jira MCP', fetchAtlassianJiraStatusContext(), '(Jira-Kontext wegen Timeout nicht verfügbar)\n', 120000),
   ]);
   const enrichedDriveContext = enrichTimestampTranscriptLinks(driveContext, eventsContext);

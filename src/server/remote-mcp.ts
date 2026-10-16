@@ -139,7 +139,7 @@ function extractToolJson(result: any): any {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-async function callOdooToolWithRetry(config: RemoteMcpServerConfig, name: string, args: Record<string, unknown>, timeoutMs = 30000) {
+async function callOdooToolWithRetry(config: RemoteMcpServerConfig, name: string, args: Record<string, unknown>, timeoutMs = 15000) {
   let lastError: any;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
@@ -149,7 +149,7 @@ async function callOdooToolWithRetry(config: RemoteMcpServerConfig, name: string
       ]);
     } catch (error: any) {
       lastError = error;
-      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1500));
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
   throw lastError || new Error(`Odoo MCP ${name} fehlgeschlagen.`);
@@ -158,7 +158,14 @@ async function callOdooToolWithRetry(config: RemoteMcpServerConfig, name: string
 export async function fetchOdooProjectStatusContext() {
   try {
     const config = await getConfiguredRemoteMcpServerAsync('odoo-mcp');
-    const callOdoo = (name: string, args: Record<string, unknown>) => callOdooToolWithRetry(config, name, args);
+    const callOdoo = async (name: string, args: Record<string, unknown>) => {
+      try {
+        return await callOdooToolWithRetry(config, name, args);
+      } catch (error: any) {
+        console.warn(`Odoo MCP ${name} partial result notice:`, error?.message || error);
+        return null;
+      }
+    };
     const projectQueryFields = ['id', 'name', 'active', 'user_id', 'company_id', 'account_id', 'date_start', 'date', 'allocated_hours', 'effective_hours', 'is_project_overtime', 'last_update_status', 'activity_date_deadline'];
     const taskQueryFields = ['id', 'name', 'active', 'project_id', 'stage_id', 'date_deadline', 'planned_hours', 'effective_hours'];
     const namedProjectAliases = [
@@ -186,6 +193,12 @@ export async function fetchOdooProjectStatusContext() {
         limit: 100,
       } }))),
     ]);
+    if (!projectsResult || !tasksResult) {
+      try {
+        const cached = JSON.parse(fs.readFileSync('.odoo-project-context-cache.json', 'utf8'));
+        if (cached.context) return `${cached.context}\n[Hinweis: Odoo-MCP teilweise nicht erreichbar; letzter erfolgreicher Odoo-Stand: ${cached.updatedAt || 'unbekannt'}]\n`;
+      } catch {}
+    }
     const aliasProjects = await Promise.all(namedProjectAliases.map(async ({ alias, terms }, aliasIndex) => {
       const namePattern = alias === 'HHA' ? /hamburger\s+hochbahn|\bhha\b/i : alias === 'VOEST' ? /voestalpine|\bvoest\b/i : /\bsuse\b/i;
       const accountRecords = terms.flatMap((_, termIndex) => extractToolRecords(aliasAccountResults[aliasIndex * terms.length + termIndex]))
@@ -394,7 +407,7 @@ export async function fetchOdooProjectStatusContext() {
     }).join('\n');
     const taggedProjectLines = taggedProjects.map(project => `- Odoo-Projekt-ID ${project.id} | exakter Odoo-Name: ${project.name}`).join('\n');
      const context = `Odoo-Projekt- und Zeiterfassungskontext (read-only, aktuelle Daten):\n[Quelle: Odoo MCP – project.project / project.task / account.analytic.line](https://odoo-mcp.gateway.pcg.io/mcp/)\nVERBINDLICHE NAMENSZUORDNUNG FÜR DEN BERICHT (immer den exakten Odoo-Namen verwenden):\n${aliasLines}\nHARDYS HAUPTPROJEKTE (project.project.user_id = Hardy-ID 13566; bei jedem Daily vollständig aus Odoo abgleichen):\n${hardyMainProjectLines || '(Keine Hauptprojekte mit Hardy als Hauptprojektmanager gefunden.)'}\nTASKS DER HARDY-HAUPTPROJEKTE:\n${hardyMainTaskLines || '(Keine aktiven Tasks zu Hardys Hauptprojekten geliefert.)'}\nHARDY-PM-PROJEKTE MIT ZUSATZMANAGER-ZUORDNUNG IM LAUFENDEN MONAT (Odoo additional_manager_ids, Hardy-ID 13566):\n${hardyPmLines || '(Keine Hardy-PM-Projekte mit aktueller Squad-Buchung gefunden.)'}\nKAPAZITÄTSAUSBLICK SQUAD (aktuelle Monatsbuchungen):\n${capacityLines || '(Keine aktuellen Squad-Buchungen gefunden.)'}\nPROJEKTE DER SQUAD IM LAUFENDEN MONAT (Zuordnung über tatsächliche Odoo-Zeitbuchungen; Hardy ist ausdrücklich enthalten):\n${squadBookingLines || '(Keine aktuellen Odoo-Zeitbuchungen der konfigurierten Squad-Mitglieder gefunden.)'}\nTATSÄCHLICH BEBUCHTE TASKS DER SQUAD IM LAUFENDEN MONAT (account.analytic.line.task_id):\n${bookedTaskLines || '(Keine Task-Buchungen mit task_id geliefert.)'}\nDie Prognose ist eine Näherung aus dem bisherigen Monatsverbrauch, keine verbindliche Lieferzusage.\nDATA/AI-PROJEKTPOOL UND SQUAD-TASK-ZUORDNUNG (project_id ist die führende Zuordnung):\n${taggedProjectLines || '(Keine Data/AI-getaggten Odoo-Projekte geliefert.)'}\n${dataAiTaskLines || '(Keine aktiven Tasks zu Data/AI-Projekten geliefert.)'}\nPROJEKTE / KUNDEN / RESTSTUNDEN:\n${projectLines || '(Keine aktiven Odoo-Projekte geliefert.)'}\nAKTIVE TASKS / ZEITERFASSUNG:\n${taskLines || '(Keine aktiven Odoo-Tasks geliefert.)'}\n`;
-    fs.writeFileSync('.odoo-project-context-cache.json', JSON.stringify({ updatedAt: new Date().toISOString(), context }), 'utf8');
+     if (projectsResult && tasksResult) fs.writeFileSync('.odoo-project-context-cache.json', JSON.stringify({ updatedAt: new Date().toISOString(), context }), 'utf8');
     return context;
   } catch (error: any) {
     console.warn('Odoo MCP project context notice:', error?.message || error);

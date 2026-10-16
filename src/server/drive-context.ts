@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 type DriveDependencies = {
   getDriveClient: (accessToken: string) => Promise<any>;
   listAllFiles: (drive: any, folderId: string) => Promise<any[]>;
@@ -5,6 +8,27 @@ type DriveDependencies = {
   recordEvidence: (inputs: any[]) => void;
   loadLocalMemoryContext: () => string;
 };
+
+const DRIVE_CONTENT_CACHE_FILE = path.join(process.cwd(), '.drive-content-cache.json');
+
+function loadDriveContentCache(): Record<string, { modifiedTime?: string; content: string }> {
+  try { return JSON.parse(fs.readFileSync(DRIVE_CONTENT_CACHE_FILE, 'utf8')); } catch { return {}; }
+}
+
+function saveDriveContentCache(cache: Record<string, { modifiedTime?: string; content: string }>): void {
+  fs.writeFileSync(DRIVE_CONTENT_CACHE_FILE, JSON.stringify(cache), 'utf8');
+}
+
+async function withListingTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
+  } catch {
+    return null;
+  }
+}
 
 export function enrichTimestampTranscriptLinks(driveContext: string, eventsContext: string): string {
   const eventPattern = /- .*?([^\n(]+)\(([^)]+) bis ([^)]+)\).*?Direktlink:\s*(https?:\/\/[^\s|]+)/g;
@@ -41,6 +65,7 @@ export function enrichTimestampTranscriptLinks(driveContext: string, eventsConte
 export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveFolderId: string | string[], dependencies: DriveDependencies) {
   try {
     const drive = await dependencies.getDriveClient(accessToken);
+    const contentCache = loadDriveContentCache();
     const externalPlaybooks = [
       {
         id: '1JoDeOWLoDmFU-kjWcJ6aKxosD-lWAcELqrPUgVp1bc4',
@@ -61,7 +86,7 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
       dependencies.recordEvidence([{ sourceType: 'drive', sourceId: source.id, content: content!, sourceTimestamp: new Date().toISOString(), sourceUrl: source.url, metadata: { name: source.name, external: true } }]);
       return `--- EXTERNE PLAYBOOK-/REGELQUELLE: "${source.name}" | Direktlink: ${source.url} ---\n${content}\n\n`;
     }).join('');
-    const folderFiles = (await Promise.all((Array.isArray(driveFolderId) ? driveFolderId : [driveFolderId]).map(folderId => dependencies.listAllFiles(drive, folderId)))).flat();
+    const folderFiles = (await Promise.all((Array.isArray(driveFolderId) ? driveFolderId : [driveFolderId]).map(folderId => withListingTimeout(dependencies.listAllFiles(drive, folderId), 45000)))).flatMap(files => files || []);
     let broadFiles: any[] = [];
     try {
       const response = await drive.files.list({
@@ -108,14 +133,18 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
     });
 
     let context = '';
-    const meetingFiles = eligibleFiles.filter(file => isMeetingFile(file)).slice(0, 20);
-    const supportingFiles = eligibleFiles.filter(file => !isMeetingFile(file)).slice(0, 8);
+    const meetingFiles = eligibleFiles.filter(file => isMeetingFile(file)).slice(0, 12);
+    const supportingFiles = eligibleFiles.filter(file => !isMeetingFile(file)).slice(0, 4);
     const filesToRead = [...meetingFiles, ...supportingFiles];
     for (let batchStart = 0; batchStart < filesToRead.length; batchStart += 20) {
       const renderedBatch = await Promise.all(filesToRead.slice(batchStart, batchStart + 20).map(async file => {
       const isMeetingDocument = isMeetingFile(file);
-       const content = await dependencies.getFileContent(drive, file.id, file.mimeType, isMeetingDocument ? 30000 : 8000);
-      if (typeof content !== 'string') return '';
+       const cached = contentCache[file.id];
+       const content = cached?.modifiedTime === file.modifiedTime
+         ? cached.content
+         : await dependencies.getFileContent(drive, file.id, file.mimeType, isMeetingDocument ? 30000 : 8000);
+       if (typeof content !== 'string') return '';
+       if (!cached || cached.modifiedTime !== file.modifiedTime) contentCache[file.id] = { modifiedTime: file.modifiedTime, content };
       const trimmedContent = isMeetingDocument
         ? content
         : content.length > 2500 ? `${content.slice(0, 2500)}\n...[Gekürzt bei 2.500 Zeichen]` : content;
@@ -139,6 +168,7 @@ export async function fetchDriveKnowledgeBaseContext(accessToken: string, driveF
       }));
       context += renderedBatch.filter(Boolean).join('');
     }
+    saveDriveContentCache(contentCache);
     return `${externalContext}${context}\n--- LOKALES MEMORY / HINTERGRUND (gegen aktuelle datierte Quellen prüfen) ---\n${dependencies.loadLocalMemoryContext()}` || '(Keine Dokumente, Meeting-Protokolle oder Transkripte im Google Drive gefunden.)\n';
   } catch (error: any) {
     console.warn('Drive knowledge base fetch notice:', error?.message || error);

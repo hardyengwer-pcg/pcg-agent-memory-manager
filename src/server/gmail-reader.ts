@@ -5,20 +5,21 @@ type RecordEvidence = (inputs: any[]) => void;
 export async function fetchRecentEmails(auth: any, recordEvidence: RecordEvidence, createGmailClient = (value: any) => google.gmail({ version: 'v1', auth: value })) {
   try {
     const gmail = createGmailClient(auth);
-    const listMessages = async (q: string) => {
+    const listMessages = async (q: string, maxMessages = 150) => {
       const result: any[] = [];
       let pageToken: string | undefined;
       do {
         const page = await gmail.users.messages.list({ userId: 'me', q, maxResults: 100, pageToken, includeSpamTrash: false });
         result.push(...(page.data.messages || []));
+        if (result.length >= maxMessages) return result.slice(0, maxMessages);
         pageToken = page.data.nextPageToken || undefined;
       } while (pageToken);
       return result;
     };
-    const messages = await listMessages('newer_than:7d -in:trash -in:spam');
+    const messages = await listMessages('newer_than:7d -in:trash -in:spam', 40);
     let targetedMessages: any[] = [];
     try {
-      targetedMessages = await listMessages('newer_than:7d -in:trash -in:spam (transcript OR transkript OR "meeting notes" OR protokoll OR summary OR zusammenfassung OR "action items" OR todo OR to-do OR aufgabe OR projekt OR zugewiesen OR "next steps" OR handover OR scoping OR proposal OR sow OR "statement of work" OR "use case" OR "use cases" OR review OR retrospective OR alignment OR sync OR briefing OR absprache OR "Koenig" OR "Bauer" OR "Lorenz" OR "domcura" OR "voestalpine" OR "VOEST" OR "PK" OR "Einarbeitung" OR "Einarbeitungsplan" OR "Onboarding" OR "Mitarbeiter" OR "September" OR "Joiner" OR "Welcome" OR "Schulung")');
+      targetedMessages = await listMessages('newer_than:7d -in:trash -in:spam (transcript OR transkript OR "meeting notes" OR protokoll OR summary OR zusammenfassung OR "action items" OR todo OR to-do OR aufgabe OR projekt OR zugewiesen OR "next steps" OR handover OR scoping OR proposal OR sow OR "statement of work" OR "use case" OR "use cases" OR review OR retrospective OR alignment OR sync OR briefing OR absprache OR "Koenig" OR "Bauer" OR "Lorenz" OR "domcura" OR "voestalpine" OR "VOEST" OR "PK" OR "Einarbeitung" OR "Einarbeitungsplan" OR "Onboarding" OR "Mitarbeiter" OR "September" OR "Joiner" OR "Welcome" OR "Schulung")', 60);
     } catch (error: any) {
       console.warn('Targeted Gmail query notice:', error?.message || error);
     }
